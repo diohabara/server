@@ -4829,8 +4829,7 @@ innobase_update_gis_column_type(
 		"BEGIN\n"
 		"UPDATE SYS_COLUMNS SET MTYPE=:mtype\n"
 		"WHERE TABLE_ID=:tableid AND NAME=:name;\n"
-		"END;\n",
-		false, trx);
+		"END;\n", trx);
 
 	trx->error_state = DB_SUCCESS;
 	trx->op_info = "";
@@ -5149,8 +5148,7 @@ static bool innobase_insert_sys_virtual(
 		    "PROCEDURE P () IS\n"
 		    "BEGIN\n"
 		    "INSERT INTO SYS_VIRTUAL VALUES (:id, :pos, :base_pos);\n"
-		    "END;\n",
-		    FALSE, trx)) {
+		    "END;\n", trx)) {
 		my_error(ER_INTERNAL_ERROR, MYF(0),
 			 "InnoDB: ADD COLUMN...VIRTUAL");
 		return true;
@@ -5199,7 +5197,7 @@ static bool innodb_insert_sys_columns(
 			    "NAME=:name, MTYPE=:mtype, PRTYPE=:prtype, "
 			    "LEN=:len, PREC=:base\n"
 			    "WHERE TABLE_ID=:id AND POS=:pos;\n"
-			    "END;\n", FALSE, trx)) {
+			    "END;\n", trx)) {
 			my_error(ER_INTERNAL_ERROR, MYF(0),
 				 "InnoDB: Updating SYS_COLUMNS failed");
 			return true;
@@ -5214,7 +5212,7 @@ static bool innodb_insert_sys_columns(
 		    "BEGIN\n"
 		    "INSERT INTO SYS_COLUMNS VALUES"
 		    "(:id,:pos,:name,:mtype,:prtype,:len,:base);\n"
-		    "END;\n", FALSE, trx)) {
+		    "END;\n", trx)) {
 		my_error(ER_INTERNAL_ERROR, MYF(0),
 			 "InnoDB: Insert into SYS_COLUMNS failed");
 		return true;
@@ -5272,7 +5270,7 @@ static bool innodb_update_cols(const dict_table_t* table, ulint n, trx_t* trx)
 				       "BEGIN\n"
 				       "UPDATE SYS_TABLES SET N_COLS = :n"
 				       " WHERE ID = :id;\n"
-				       "END;\n", FALSE, trx)) {
+				       "END;\n", trx)) {
 		my_error(ER_INTERNAL_ERROR, MYF(0),
 			 "InnoDB: Updating SYS_TABLES.N_COLS failed");
 		return true;
@@ -5327,7 +5325,7 @@ static bool innobase_instant_drop_cols(table_id_t id, ulint pos, trx_t* trx)
 			"DELETE FROM SYS_COLUMNS WHERE\n"
 			"TABLE_ID = :id AND POS >= :pos;\n"
 			"DELETE FROM SYS_VIRTUAL WHERE TABLE_ID = :id;\n"
-			"END;\n", FALSE, trx);
+			"END;\n", trx);
 	if (err != DB_SUCCESS) {
 		my_error(ER_INTERNAL_ERROR, MYF(0),
 			 "InnoDB: DELETE from SYS_COLUMNS/SYS_VIRTUAL failed");
@@ -5365,8 +5363,7 @@ innobase_update_v_pos_sys_columns(
 			"SET POS = :val\n"
 			"WHERE POS = :pos\n"
 			"AND TABLE_ID = :id;\n"
-			"END;\n",
-			FALSE, trx);
+			"END;\n", trx);
 
 	return(error);
 }
@@ -5399,8 +5396,7 @@ innobase_update_v_pos_sys_virtual(
 			"SET POS = :val\n"
 			"WHERE POS = :pos\n"
 			"AND TABLE_ID = :id;\n"
-			"END;\n",
-			FALSE, trx);
+			"END;\n", trx);
 
 	return(error);
 }
@@ -5434,8 +5430,7 @@ innobase_drop_one_virtual_sys_columns(
 			"DELETE FROM SYS_COLUMNS\n"
 			"WHERE TABLE_ID = :id\n"
 			"AND NAME = :name;\n"
-			"END;\n",
-			FALSE, trx);
+			"END;\n", trx);
 
 	if (error != DB_SUCCESS) {
 		return(error);
@@ -5493,8 +5488,7 @@ innobase_drop_one_virtual_sys_virtual(
 			"DELETE FROM SYS_VIRTUAL\n"
 			"WHERE TABLE_ID = :id\n"
 			"AND POS = :pos;\n"
-			"END;\n",
-			FALSE, trx);
+			"END;\n", trx);
 
 	return(error);
 }
@@ -7356,8 +7350,7 @@ rename_index_try(
 		"WHERE\n"
 		"ID = :index_id AND\n"
 		"TABLE_ID = :table_id;\n"
-		"END;\n",
-		FALSE, trx); /* pinfo is freed by que_eval_sql() */
+		"END;\n", trx); /* pinfo is freed by que_eval_sql() */
 
 	DBUG_EXECUTE_IF(
 		"ib_rename_index_fail1",
@@ -8866,7 +8859,7 @@ innobase_drop_foreign_try(
 	pars_info_add_str_literal(info, "id", foreign_id);
 
 	trx->op_info = "dropping foreign key constraint from dictionary";
-	error = que_eval_sql(info, sql, FALSE, trx);
+	error = que_eval_sql(info, sql, trx);
 	trx->op_info = "";
 
 	DBUG_EXECUTE_IF("ib_drop_foreign_error",
@@ -8951,8 +8944,7 @@ innobase_rename_column_try(
 				"UPDATE SYS_FIELDS SET COL_NAME=:new\n"
 				"WHERE INDEX_ID=:indexid\n"
 				"AND POS=:nth;\n"
-				"END;\n",
-				FALSE, trx);
+				"END;\n", trx);
 			DBUG_EXECUTE_IF("ib_rename_column_error",
 					error = DB_OUT_OF_FILE_SPACE;);
 
@@ -8982,8 +8974,7 @@ innobase_rename_column_try(
 				"UPDATE SYS_FIELDS SET COL_NAME=:new\n"
 				"WHERE INDEX_ID=:indexid\n"
 				"AND POS=:nth;\n"
-				"END;\n",
-				FALSE, trx);
+				"END;\n", trx);
 
 			if (error != DB_SUCCESS) {
 				goto err_exit;
@@ -9044,8 +9035,7 @@ rename_foreign:
 				"UPDATE SYS_FOREIGN_COLS\n"
 				"SET FOR_COL_NAME=:new\n"
 				"WHERE ID=:id AND POS=:nth;\n"
-				"END;\n",
-				FALSE, trx);
+				"END;\n", trx);
 
 			if (error != DB_SUCCESS) {
 				goto err_exit;
@@ -9086,8 +9076,7 @@ rename_foreign:
 				"UPDATE SYS_FOREIGN_COLS\n"
 				"SET REF_COL_NAME=:new\n"
 				"WHERE ID=:id AND POS=:nth;\n"
-				"END;\n",
-				FALSE, trx);
+				"END;\n", trx);
 
 			if (error != DB_SUCCESS) {
 				goto err_exit;
@@ -9763,8 +9752,7 @@ vers_change_field_try(
 				     "BEGIN\n"
 				     "UPDATE SYS_COLUMNS SET PRTYPE=:prtype\n"
 				     "WHERE TABLE_ID=:tableid AND POS=:pos;\n"
-				     "END;\n",
-				     false, trx);
+				     "END;\n", trx);
 
 	if (error != DB_SUCCESS) {
 		my_error_innodb(error, table_name, 0);
@@ -10107,8 +10095,7 @@ innobase_page_compression_try(
 				     "BEGIN\n"
 				     "UPDATE SYS_TABLES SET TYPE=:type\n"
 				     "WHERE ID=:id;\n"
-				     "END;\n",
-				     false, trx);
+				     "END;\n", trx);
 
 	if (error != DB_SUCCESS) {
 		my_error_innodb(error, table_name, 0);
@@ -10264,7 +10251,7 @@ commit_try_norebuild(
 
 		pars_info_t* info = pars_info_create();
 		pars_info_add_ull_literal(info, "indexid", index->id);
-		error = que_eval_sql(info, drop_index, FALSE, trx);
+		error = que_eval_sql(info, drop_index, trx);
 
 		if (error == DB_SUCCESS && index->type & DICT_FTS) {
 			DBUG_ASSERT(index->table->fts);

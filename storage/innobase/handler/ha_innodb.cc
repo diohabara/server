@@ -1469,7 +1469,7 @@ retry:
                             ? innodb_drop_database_fk
                             : innodb_drop_database_ignore_fk, &report);
     pars_info_add_str_literal(pinfo, "db", namebuf);
-    err= que_eval_sql(pinfo, drop_database, false, trx);
+    err= que_eval_sql(pinfo, drop_database, trx);
     if (err == DB_SUCCESS && report.violated)
       err= DB_CANNOT_DROP_CONSTRAINT;
   }

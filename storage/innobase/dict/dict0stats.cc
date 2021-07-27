@@ -539,13 +539,13 @@ dberr_t dict_stats_exec_sql(pars_info_t *pinfo, const char* sql, trx_t *trx)
   }
 
   if (trx)
-    return que_eval_sql(pinfo, sql, FALSE, trx);
+    return que_eval_sql(pinfo, sql, trx);
 
   trx= trx_create();
   trx_start_internal(trx);
 
   trx->dict_operation_lock_mode= RW_X_LATCH;
-  dberr_t err= que_eval_sql(pinfo, sql, FALSE, trx);
+  dberr_t err= que_eval_sql(pinfo, sql, trx);
 
   if (err == DB_SUCCESS)
     trx->commit();
@@ -3265,7 +3265,7 @@ dict_stats_fetch_from_ps(
 			        "fetch_index_stats_step",
 			        dict_stats_fetch_index_stats_step,
 			        &index_fetch_arg);
-
+	dict_sys.mutex_lock(); /* FIXME: remove this */
 	ret = que_eval_sql(pinfo,
 			   "PROCEDURE FETCH_STATS () IS\n"
 			   "found INT;\n"
@@ -3319,9 +3319,9 @@ dict_stats_fetch_from_ps(
 			   "END LOOP;\n"
 			   "CLOSE index_stats_cur;\n"
 
-			   "END;",
-			   TRUE, trx);
+			   "END;", trx);
 	/* pinfo is freed by que_eval_sql() */
+	dict_sys.mutex_unlock();
 
 	trx_commit_for_mysql(trx);
 

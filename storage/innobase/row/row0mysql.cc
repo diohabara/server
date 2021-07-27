@@ -2466,7 +2466,7 @@ row_mysql_table_id_reassign(
 		" WHERE TABLE_ID = :old_id;\n"
 		"UPDATE SYS_VIRTUAL SET TABLE_ID = :new_id\n"
 		" WHERE TABLE_ID = :old_id;\n"
-		"END;\n", FALSE, trx);
+		"END;\n", trx);
 
 	return(err);
 }
@@ -2762,8 +2762,7 @@ row_delete_constraint_low(
 			    "BEGIN\n"
 			    "DELETE FROM SYS_FOREIGN_COLS WHERE ID = :id;\n"
 			    "DELETE FROM SYS_FOREIGN WHERE ID = :id;\n"
-			    "END;\n"
-			    , FALSE, trx));
+			    "END;\n", trx));
 }
 
 /****************************************************************//**
@@ -2947,8 +2946,7 @@ row_rename_table_for_mysql(
 			   "UPDATE SYS_TABLES"
 			   " SET NAME = :new_table_name\n"
 			   " WHERE NAME = :old_table_name;\n"
-			   "END;\n"
-			   , FALSE, trx);
+			   "END;\n", trx);
 
 	if (err != DB_SUCCESS) {
 		// Assume the caller guarantees destination name doesn't exist.
@@ -3066,8 +3064,7 @@ row_rename_table_for_mysql(
 			"WHERE REF_NAME = :old_table_name\n"
 			"  AND TO_BINARY(REF_NAME)\n"
 			"    = TO_BINARY(:old_table_name);\n"
-			"END;\n"
-			, FALSE, trx);
+			"END;\n", trx);
 
 	} else if (n_constraints_to_drop > 0) {
 		/* Drop some constraints of tmp tables. */

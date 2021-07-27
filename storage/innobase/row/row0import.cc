@@ -3310,7 +3310,7 @@ dberr_t row_import_update_discarded_flag(trx_t* trx, table_id_t table_id,
 	pars_info_bind_function(
 		info, "my_func", row_import_set_discarded, &discard);
 
-	dberr_t	err = que_eval_sql(info, sql, false, trx);
+	dberr_t	err = que_eval_sql(info, sql, trx);
 
 	ut_a(discard.n_recs == 1);
 	ut_a(discard.flags2 != ULINT32_UNDEFINED);
