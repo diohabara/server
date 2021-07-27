@@ -161,37 +161,24 @@ row_upd_index_is_referenced(
 
 #ifdef WITH_WSREP
 static
-ibool
+bool
 wsrep_row_upd_index_is_foreign(
 /*========================*/
 	dict_index_t*	index,	/*!< in: index */
 	trx_t*		trx)	/*!< in: transaction */
 {
+	if (!trx->is_wsrep()) {
+		return false;
+	}
+
 	dict_table_t*	table		= index->table;
-	ibool		froze_data_dict	= FALSE;
-	ibool		is_referenced	= FALSE;
-
-	if (table->foreign_set.empty()) {
-		return(FALSE);
-	}
-
-	if (trx->dict_operation_lock_mode == 0) {
-		row_mysql_freeze_data_dictionary(trx);
-		froze_data_dict = TRUE;
-	}
 
 	dict_foreign_set::iterator	it
 		= std::find_if(table->foreign_set.begin(),
 			       table->foreign_set.end(),
 			       dict_foreign_with_foreign_index(index));
 
-	is_referenced = (it != table->foreign_set.end());
-
-	if (froze_data_dict) {
-		row_mysql_unfreeze_data_dictionary(trx);
-	}
-
-	return(is_referenced);
+	return it != table->foreign_set.end();
 }
 #endif /* WITH_WSREP */
 
@@ -1957,7 +1944,7 @@ row_upd_sec_index_entry(
 
 	const bool referenced = row_upd_index_is_referenced(index, trx);
 #ifdef WITH_WSREP
-	bool foreign = wsrep_row_upd_index_is_foreign(index, trx);
+	const bool foreign = wsrep_row_upd_index_is_foreign(index, trx);
 #endif /* WITH_WSREP */
 
 	heap = mem_heap_create(1024);
