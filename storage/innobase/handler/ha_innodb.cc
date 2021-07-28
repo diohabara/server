@@ -15294,15 +15294,10 @@ bool ha_innobase::can_switch_engines()
 {
   DBUG_ENTER("ha_innobase::can_switch_engines");
   update_thd();
-  if (!m_prebuilt->table->foreign_set.empty())
-    return false;
-  /* mysql_alter_table() is not acquiring MDL on the tables whose
-  FOREIGN KEY...REFERENCES clauses are pointing to this table.
-  Hence, we must protect the read with dict_sys.latch. */
-  dict_sys.freeze();
-  const bool empty= m_prebuilt->table->referenced_set.empty();
-  dict_sys.unfreeze();
-  return empty;
+  /* FIXME: Does mysql_alter_table() acquire MDL on the child tables?
+  If not, it is not safe to access referenced_set here. */
+  return m_prebuilt->table->foreign_set.empty() &&
+    m_prebuilt->table->referenced_set.empty();
 }
 
 /*******************************************************************//**
