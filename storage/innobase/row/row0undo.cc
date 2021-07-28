@@ -401,8 +401,6 @@ row_undo(
 		return DB_SUCCESS;
 	}
 
-	trx_t* trx = node->trx;
-
 	dberr_t err;
 
 	switch (node->state) {

@@ -122,10 +122,6 @@ row_upd_changes_first_fields_binary(
 Checks if index currently is mentioned as a referenced index in a foreign
 key constraint.
 
-NOTE that since we do not hold dict_sys.latch when leaving the
-function, it may be that the referencing table has been dropped when
-we leave this function: this function is only for heuristic use!
-
 @return true if referenced */
 static
 bool
@@ -134,29 +130,12 @@ row_upd_index_is_referenced(
 	dict_index_t*	index,	/*!< in: index */
 	trx_t*		trx)	/*!< in: transaction */
 {
-	dict_table_t*	table		= index->table;
-
-	if (table->referenced_set.empty()) {
-		return false;
-	}
-
-	const bool froze_data_dict = !trx->dict_operation_lock_mode;
-	if (froze_data_dict) {
-		row_mysql_freeze_data_dictionary(trx);
-	}
-
-	dict_foreign_set::iterator	it
-		= std::find_if(table->referenced_set.begin(),
-			       table->referenced_set.end(),
-			       dict_foreign_with_index(index));
-
-	const bool is_referenced = (it != table->referenced_set.end());
-
-	if (froze_data_dict) {
-		row_mysql_unfreeze_data_dictionary(trx);
-	}
-
-	return is_referenced;
+  dict_table_t *table= index->table;
+  /* The pointers in table->referenced_set are safe to dereference
+  thanks to the SQL layer having acquired MDL on all (grand)parent tables. */
+  dict_foreign_set::iterator end= table->referenced_set.end();
+  return end != std::find_if(table->referenced_set.begin(), end,
+                             dict_foreign_with_index(index));
 }
 
 #ifdef WITH_WSREP
@@ -209,7 +188,6 @@ row_upd_check_references_constraints(
 	trx_t*		trx;
 	const rec_t*	rec;
 	dberr_t		err;
-	ibool		got_s_lock	= FALSE;
 
 	DBUG_ENTER("row_upd_check_references_constraints");
 
@@ -231,12 +209,6 @@ row_upd_check_references_constraints(
 	DEBUG_SYNC_C("foreign_constraint_check_for_update");
 
 	mtr->start();
-
-	if (trx->dict_operation_lock_mode == 0) {
-		got_s_lock = TRUE;
-
-		row_mysql_freeze_data_dictionary(trx);
-	}
 
 	DEBUG_SYNC_C_IF_THD(thr_get_trx(thr)->mysql_thd,
 			    "foreign_constraint_check_for_insert");
@@ -284,10 +256,6 @@ row_upd_check_references_constraints(
 	err = DB_SUCCESS;
 
 func_exit:
-	if (got_s_lock) {
-		row_mysql_unfreeze_data_dictionary(trx);
-	}
-
 	mem_heap_free(heap);
 
 	DEBUG_SYNC_C("foreign_constraint_check_for_update_done");
@@ -314,7 +282,6 @@ wsrep_row_upd_check_foreign_constraints(
 	trx_t*		trx;
 	const rec_t*	rec;
 	dberr_t		err;
-	ibool		got_s_lock	= FALSE;
 	ibool		opened     	= FALSE;
 
 	if (table->foreign_set.empty()) {
@@ -335,12 +302,6 @@ wsrep_row_upd_check_foreign_constraints(
 	mtr_commit(mtr);
 
 	mtr_start(mtr);
-
-	if (trx->dict_operation_lock_mode == 0) {
-		got_s_lock = TRUE;
-
-		row_mysql_freeze_data_dictionary(trx);
-	}
 
 	for (dict_foreign_set::iterator it = table->foreign_set.begin();
 	     it != table->foreign_set.end();
@@ -389,10 +350,6 @@ wsrep_row_upd_check_foreign_constraints(
 
 	err = DB_SUCCESS;
 func_exit:
-	if (got_s_lock) {
-		row_mysql_unfreeze_data_dictionary(trx);
-	}
-
 	mem_heap_free(heap);
 
 	return(err);
