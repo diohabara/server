@@ -5097,8 +5097,7 @@ i_s_sys_tables_fill_table_stats(
 		DBUG_RETURN(0);
 	}
 
-	dict_sys.freeze();
-	dict_sys.mutex_lock();
+	dict_sys.lock(SRW_LOCK_CALL);
 	mtr_start(&mtr);
 
 	rec = dict_startscan_system(&pcur, &mtr, dict_sys.sys_tables);
@@ -5126,19 +5125,19 @@ i_s_sys_tables_fill_table_stats(
 					    err_msg);
 		}
 
-		dict_sys.unfreeze();
-
-		/* Get the next record */
-		dict_sys.freeze();
+#if 1 /* FIXME: rewrite this. Acquire global MDL? */
 		dict_sys.mutex_lock();
+		dict_sys.unlock();
+#endif
+		/* Get the next record */
+		dict_sys.lock(SRW_LOCK_CALL);
 
 		mtr_start(&mtr);
 		rec = dict_getnext_system(&pcur, &mtr);
 	}
 
 	mtr_commit(&mtr);
-	dict_sys.mutex_unlock();
-	dict_sys.unfreeze();
+	dict_sys.unlock();
 
 	DBUG_RETURN(0);
 }

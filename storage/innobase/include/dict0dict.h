@@ -1582,11 +1582,6 @@ public:
     latch.wr_unlock();
   }
 
-  /** Prevent modifications of the data dictionary */
-  void freeze() { latch.rd_lock(SRW_LOCK_CALL); ut_ad(!latch_ex); }
-  /** Allow modifications of the data dictionary */
-  void unfreeze() { ut_ad(!latch_ex); latch.rd_unlock(); }
-
   /** Estimate the used memory occupied by the data dictionary
   table and index objects.
   @return number of bytes occupied */
