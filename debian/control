@@ -1,4 +1,4 @@
-Source: mariadb-10.7
+Source: mariadb
 Section: database
 Priority: optional
 Maintainer: MariaDB Developers <maria-developers@lists.launchpad.net>
@@ -94,6 +94,7 @@ Depends: libmariadb-dev (= ${binary:Version}),
          ${misc:Depends}
 Conflicts: libmariadb-client-lgpl-dev,
            libmariadb-client-lgpl-dev-compat,
+           libmariadbclient-dev (<< ${source:Version}),
            libmariadbclient-dev-compat,
            libmysqlclient-dev,
            libmysqlclient10-dev,
@@ -108,6 +109,7 @@ Breaks: libmariadb-dev (<< ${source:Version})
 Replaces: libmariadb-client-lgpl-dev,
           libmariadb-client-lgpl-dev-compat,
           libmariadb-dev (<< ${source:Version}),
+          libmariadbclient-dev (<< ${source:Version}),
           libmariadbclient-dev-compat,
           libmysqlclient-dev
 Description: MariaDB Connector/C, compatibility symlinks
@@ -263,20 +265,22 @@ Description: MariaDB common configuration files
  .
  This package includes configuration files common to all MariaDB programs.
 
-Package: mariadb-client-core-10.7
+Package: mariadb-client-core
 Architecture: any
 Depends: libmariadb3 (>= 10.5.4),
          mariadb-common (>= ${source:Version}),
          ${misc:Depends},
          ${shlibs:Depends}
-Conflicts: mariadb-client-10.0,
+Conflicts: mariadb-client (<< ${source:Version}),
+           mariadb-client-10.0,
            mariadb-client-10.1,
            mariadb-client-10.2,
            mariadb-client-10.3,
            mariadb-client-10.4,
            mariadb-client-10.5,
            mariadb-client-10.6,
-           mariadb-client-10.7 (<< ${source:Version}),
+           mariadb-client-10.7,
+           mariadb-client-10.8,
            mariadb-client-5.1,
            mariadb-client-5.2,
            mariadb-client-5.3,
@@ -288,6 +292,8 @@ Conflicts: mariadb-client-10.0,
            mariadb-client-core-10.4,
            mariadb-client-core-10.5,
            mariadb-client-core-10.6,
+           mariadb-client-core-10.7,
+           mariadb-client-core-10.8,
            mariadb-client-core-5.1,
            mariadb-client-core-5.2,
            mariadb-client-core-5.3,
@@ -304,6 +310,7 @@ Conflicts: mariadb-client-10.0,
            virtual-mysql-client-core
 Breaks: mariadb-server-10.0,
         mariadb-server-10.1,
+        mariadb-server-core (<< ${source:Version}),
         mariadb-server-core-10.0,
         mariadb-server-core-10.1,
         mariadb-server-core-10.2,
@@ -311,7 +318,8 @@ Breaks: mariadb-server-10.0,
         mariadb-server-core-10.4,
         mariadb-server-core-10.5,
         mariadb-server-core-10.6,
-        mariadb-server-core-10.7 (<< ${source:Version}),
+        mariadb-server-core-10.7,
+        mariadb-server-core-10.8,
         mysql-server-core-5.5,
         mysql-server-core-5.6,
         mysql-server-core-5.7,
@@ -319,14 +327,17 @@ Breaks: mariadb-server-10.0,
         percona-server-server-5.6,
         percona-xtradb-cluster-server-5.6,
         percona-xtradb-cluster-server-5.7
-Replaces: mariadb-client-10.0,
+Replaces: mariadb-client (<< ${source:Version}),
+          mariadb-client-10.0,
           mariadb-client-10.1,
           mariadb-client-10.2,
           mariadb-client-10.3,
           mariadb-client-10.4,
           mariadb-client-10.5,
           mariadb-client-10.6,
-          mariadb-client-10.7 (<< ${source:Version}),
+          mariadb-client-10.7,
+          mariadb-client-10.8,
+          mariadb-client-10.9 (<< ${source:Version}),
           mariadb-client-5.1,
           mariadb-client-5.2,
           mariadb-client-5.3,
@@ -338,12 +349,15 @@ Replaces: mariadb-client-10.0,
           mariadb-client-core-10.4,
           mariadb-client-core-10.5,
           mariadb-client-core-10.6,
+          mariadb-client-core-10.7,
+          mariadb-client-core-10.8,
           mariadb-client-core-5.1,
           mariadb-client-core-5.2,
           mariadb-client-core-5.3,
           mariadb-client-core-5.5,
           mariadb-server-10.0,
           mariadb-server-10.1,
+          mariadb-server-core (<< ${source:Version}),
           mariadb-server-core-10.0,
           mariadb-server-core-10.1,
           mariadb-server-core-10.2,
@@ -351,7 +365,9 @@ Replaces: mariadb-client-10.0,
           mariadb-server-core-10.4,
           mariadb-server-core-10.5,
           mariadb-server-core-10.6,
-          mariadb-server-core-10.7 (<< ${source:Version}),
+          mariadb-server-core-10.7,
+          mariadb-server-core-10.8,
+          mariadb-server-core-10.9 (<< ${source:Version}),
           mysql-client (<< 5.0.51),
           mysql-client-5.0,
           mysql-client-5.1,
@@ -370,6 +386,7 @@ Replaces: mariadb-client-10.0,
           percona-xtradb-cluster-server-5.7,
           virtual-mysql-client-core
 Provides: default-mysql-client-core,
+          mariadb-client-core-10.9,
           virtual-mysql-client-core
 Description: MariaDB database core client binaries
  MariaDB is a fast, stable and true multi-user, multi-threaded SQL database
@@ -379,11 +396,11 @@ Description: MariaDB database core client binaries
  .
  This package includes the core client files, as used by Akonadi.
 
-Package: mariadb-client-10.7
+Package: mariadb-client
 Architecture: any
 Depends: debianutils (>=1.6),
          libconfig-inifiles-perl,
-         mariadb-client-core-10.7 (>= ${source:Version}),
+         mariadb-client-core (>= ${source:Version}),
          mariadb-common,
          ${misc:Depends},
          ${perl:Depends},
@@ -396,7 +413,9 @@ Conflicts: mariadb-client (<< ${source:Version}),
            mariadb-client-10.4,
            mariadb-client-10.5,
            mariadb-client-10.6,
-           mariadb-client-10.7 (<< ${source:Version}),
+           mariadb-client-10.7,
+           mariadb-client-10.8,
+           mariadb-client-10.9 (<< ${source:Version}),
            mariadb-client-5.1,
            mariadb-client-5.2,
            mariadb-client-5.3,
@@ -416,14 +435,18 @@ Conflicts: mariadb-client (<< ${source:Version}),
            mysql-client-core-8.0,
            mytop,
            virtual-mysql-client
-Breaks: mariadb-client-core-10.0,
+Breaks: mariadb-client-core (<< ${source:Version}),
+        mariadb-client-core-10.0,
         mariadb-client-core-10.1,
         mariadb-client-core-10.2,
         mariadb-client-core-10.3,
         mariadb-client-core-10.4,
         mariadb-client-core-10.5,
         mariadb-client-core-10.6,
-        mariadb-client-core-10.7 (<< ${source:Version}),
+        mariadb-client-core-10.7,
+        mariadb-client-core-10.8,
+        mariadb-client-core-10.9 (<< ${source:Version}),
+        mariadb-server (<< ${source:Version}),
         mariadb-server-10.0,
         mariadb-server-10.1,
         mariadb-server-10.2,
@@ -431,7 +454,10 @@ Breaks: mariadb-client-core-10.0,
         mariadb-server-10.4,
         mariadb-server-10.5,
         mariadb-server-10.6,
-        mariadb-server-10.7 (<< ${source:Version}),
+        mariadb-server-10.7,
+        mariadb-server-10.8,
+        mariadb-server-10.9 (<< ${source:Version}),
+        mariadb-server-core (<< ${source:Version}),
         mariadb-server-core-10.0,
         mariadb-server-core-10.1,
         mariadb-server-core-10.2,
@@ -439,7 +465,8 @@ Breaks: mariadb-client-core-10.0,
         mariadb-server-core-10.4,
         mariadb-server-core-10.5,
         mariadb-server-core-10.6,
-        mariadb-server-core-10.7 (<< ${source:Version}),
+        mariadb-server-core-10.7,
+        mariadb-server-core-10.8,
         mysql-server-5.5,
         mysql-server-5.6,
         mysql-server-5.7,
@@ -459,10 +486,14 @@ Replaces: mariadb-client (<< ${source:Version}),
           mariadb-client-10.4,
           mariadb-client-10.5,
           mariadb-client-10.6,
+          mariadb-client-10.7,
+          mariadb-client-10.8,
+          mariadb-client-10.9 (<< ${source:Version}),
           mariadb-client-5.1,
           mariadb-client-5.2,
           mariadb-client-5.3,
           mariadb-client-5.5,
+          mariadb-client-core (<< ${source:Version}),
           mariadb-client-core-10.0,
           mariadb-client-core-10.1,
           mariadb-client-core-10.2,
@@ -470,7 +501,10 @@ Replaces: mariadb-client (<< ${source:Version}),
           mariadb-client-core-10.4,
           mariadb-client-core-10.5,
           mariadb-client-core-10.6,
-          mariadb-client-core-10.7 (<< ${source:Version}),
+          mariadb-client-core-10.7,
+          mariadb-client-core-10.8,
+          mariadb-client-core-10.9 (<< ${source:Version}),
+          mariadb-server (<< ${source:Version}),
           mariadb-server-10.0,
           mariadb-server-10.1,
           mariadb-server-10.2,
@@ -478,7 +512,10 @@ Replaces: mariadb-client (<< ${source:Version}),
           mariadb-server-10.4,
           mariadb-server-10.5,
           mariadb-server-10.6,
-          mariadb-server-10.7 (<< ${source:Version}),
+          mariadb-server-10.7,
+          mariadb-server-10.8,
+          mariadb-server-10.9 (<< ${source:Version}),
+          mariadb-server-core (<< ${source:Version}),
           mariadb-server-core-10.0,
           mariadb-server-core-10.1,
           mariadb-server-core-10.2,
@@ -486,7 +523,9 @@ Replaces: mariadb-client (<< ${source:Version}),
           mariadb-server-core-10.4,
           mariadb-server-core-10.5,
           mariadb-server-core-10.6,
-          mariadb-server-core-10.7 (<< ${source:Version}),
+          mariadb-server-core-10.7,
+          mariadb-server-core-10.8,
+          mariadb-server-core-10.9 (<< ${source:Version}),
           mysql-client (<< 5.0.51),
           mysql-client-5.0,
           mysql-client-5.1,
@@ -514,6 +553,7 @@ Replaces: mariadb-client (<< ${source:Version}),
           percona-xtradb-cluster-server-5.7,
           virtual-mysql-client
 Provides: default-mysql-client,
+          mariadb-client-10.9,
           virtual-mysql-client
 Recommends: libdbd-mariadb-perl | libdbd-mysql-perl,
             libdbi-perl,
@@ -527,7 +567,7 @@ Description: MariaDB database client binaries
  This package includes the client binaries and the additional tools
  innotop and mariadb-report (mysqlreport).
 
-Package: mariadb-server-core-10.7
+Package: mariadb-server-core
 Architecture: any
 Depends: mariadb-common (>= ${source:Version}),
          ${misc:Depends},
@@ -539,6 +579,9 @@ Conflicts: mariadb-server-core-10.0,
            mariadb-server-core-10.4,
            mariadb-server-core-10.5,
            mariadb-server-core-10.6,
+           mariadb-server-core-10.7,
+           mariadb-server-core-10.8,
+           mariadb-server-core-10.9 (<< ${source:Version}),
            mariadb-server-core-5.1,
            mariadb-server-core-5.2,
            mariadb-server-core-5.3,
@@ -551,21 +594,27 @@ Conflicts: mariadb-server-core-10.0,
            mysql-server-core-5.7,
            mysql-server-core-8.0,
            virtual-mysql-server-core
-Breaks: mariadb-client-10.0,
+Breaks: mariadb-client (<< ${source:Version}),
+        mariadb-client-10.0,
         mariadb-client-10.1,
         mariadb-client-10.2,
         mariadb-client-10.3,
         mariadb-client-10.4,
         mariadb-client-10.5,
         mariadb-client-10.6,
-        mariadb-client-10.7 (<< ${source:Version}),
+        mariadb-client-10.7,
+        mariadb-client-10.8,
+        mariadb-client-10.9 (<< ${source:Version}),
+        mariadb-server (<< ${source:Version}),
         mariadb-server-10.0,
         mariadb-server-10.1,
         mariadb-server-10.3,
         mariadb-server-10.4,
         mariadb-server-10.5,
         mariadb-server-10.6,
-        mariadb-server-10.7 (<< ${source:Version}),
+        mariadb-server-10.7,
+        mariadb-server-10.8,
+        mariadb-server-10.9 (<< ${source:Version}),
         mysql-client-5.5,
         mysql-server-5.5,
         mysql-server-5.6,
@@ -574,21 +623,27 @@ Breaks: mariadb-client-10.0,
         percona-server-server-5.6,
         percona-xtradb-cluster-server-5.6,
         percona-xtradb-cluster-server-5.7
-Replaces: mariadb-client-10.0,
+Replaces: mariadb-client (<< ${source:Version}),
+          mariadb-client-10.0,
           mariadb-client-10.1,
           mariadb-client-10.2,
           mariadb-client-10.3,
           mariadb-client-10.4,
           mariadb-client-10.5,
           mariadb-client-10.6,
-          mariadb-client-10.7 (<< ${source:Version}),
+          mariadb-client-10.7,
+          mariadb-client-10.8,
+          mariadb-client-10.9 (<< ${source:Version}),
+          mariadb-server (<< ${source:Version}),
           mariadb-server-10.0,
           mariadb-server-10.1,
           mariadb-server-10.3,
           mariadb-server-10.4,
           mariadb-server-10.5,
           mariadb-server-10.6,
-          mariadb-server-10.7 (<< ${source:Version}),
+          mariadb-server-10.7,
+          mariadb-server-10.8,
+          mariadb-server-10.9 (<< ${source:Version}),
           mariadb-server-core-10.0,
           mariadb-server-core-10.1,
           mariadb-server-core-10.2,
@@ -616,6 +671,7 @@ Replaces: mariadb-client-10.0,
           percona-xtradb-cluster-server-5.7,
           virtual-mysql-server-core
 Provides: default-mysql-server-core,
+          mariadb-server-core-10.9,
           virtual-mysql-server-core
 Description: MariaDB database core server files
  MariaDB is a fast, stable and true multi-user, multi-threaded SQL database
@@ -625,12 +681,13 @@ Description: MariaDB database core server files
  .
  This package includes the core server files, as used by Akonadi.
 
-Package: mariadb-server-10.7
+Package: mariadb-server
 Architecture: any
 Suggests: mailx,
           mariadb-test,
           netcat-openbsd
-Recommends: libhtml-template-perl
+Recommends: libhtml-template-perl,
+            pv
 Pre-Depends: adduser (>= 3.40),
              debconf,
              mariadb-common (>= ${source:Version})
@@ -640,8 +697,8 @@ Depends: galera-4 (>= 26.4),
          libdbi-perl,
          lsb-base (>= 3.0-10),
          lsof [linux-any],
-         mariadb-client-10.7 (>= ${source:Version}),
-         mariadb-server-core-10.7 (>= ${source:Version}),
+         mariadb-client (>= ${source:Version}),
+         mariadb-server-core (>= ${source:Version}),
          passwd,
          perl (>= 5.6),
          procps,
@@ -659,6 +716,9 @@ Conflicts: mariadb-server (<< ${source:Version}),
            mariadb-server-10.4,
            mariadb-server-10.5,
            mariadb-server-10.6,
+           mariadb-server-10.7,
+           mariadb-server-10.8,
+           mariadb-server-10.9 (<< ${source:Version}),
            mariadb-server-5.1,
            mariadb-server-5.2,
            mariadb-server-5.3,
@@ -688,9 +748,12 @@ Breaks: handlersocket-mysql-5.5,
 Replaces: handlersocket-mysql-5.5,
           libmariadbclient-dev (<< 5.5.0),
           libmariadbclient16,
+          mariadb-client (<< ${source:Version}),
           mariadb-client-10.5,
           mariadb-client-10.6,
-          mariadb-client-10.7 (<< ${source:Version}),
+          mariadb-client-10.7,
+          mariadb-client-10.8,
+          mariadb-client-10.9 (<< ${source:Version}),
           mariadb-server (<< ${source:Version}),
           mariadb-server-10.0,
           mariadb-server-10.1,
@@ -699,6 +762,9 @@ Replaces: handlersocket-mysql-5.5,
           mariadb-server-10.4,
           mariadb-server-10.5,
           mariadb-server-10.6,
+          mariadb-server-10.7,
+          mariadb-server-10.8,
+          mariadb-server-10.9 (<< ${source:Version}),
           mariadb-server-5.1,
           mariadb-server-5.2,
           mariadb-server-5.3,
@@ -721,6 +787,7 @@ Replaces: handlersocket-mysql-5.5,
           percona-xtradb-cluster-server-5.7,
           virtual-mysql-server
 Provides: default-mysql-server,
+          mariadb-server-10.9,
           virtual-mysql-server
 Description: MariaDB database server binaries
  MariaDB is a fast, stable and true multi-user, multi-threaded SQL database
@@ -730,32 +797,6 @@ Description: MariaDB database server binaries
  .
  This package includes the server binaries.
 
-Package: mariadb-server
-Architecture: all
-Depends: mariadb-server-10.7 (>= ${source:Version}),
-         ${misc:Depends}
-Description: MariaDB database server (metapackage depending on the latest version)
- This is an empty package that depends on the current "best" version of
- mariadb-server (currently mariadb-server-10.7), as determined by the MariaDB
- maintainers. Install this package if in doubt about which MariaDB
- version you need. That will install the version recommended by the
- package maintainers.
- .
- MariaDB is a fast, stable and true multi-user, multi-threaded SQL database
- server. SQL (Structured Query Language) is the most popular database query
- language in the world. The main goals of MariaDB are speed, robustness and
- ease of use.
-
-Package: mariadb-client
-Architecture: all
-Depends: mariadb-client-10.7 (>= ${source:Version}),
-         ${misc:Depends}
-Description: MariaDB database client (metapackage depending on the latest version)
- This is an empty package that depends on the current "best" version of
- mariadb-client (currently mariadb-client-10.7), as determined by the MariaDB
- maintainers.  Install this package if in doubt about which MariaDB version
- you want, as this is the one considered to be in the best shape.
-
 Package: mariadb-backup
 Architecture: any
 Breaks: mariadb-backup-10.1,
@@ -764,7 +805,7 @@ Breaks: mariadb-backup-10.1,
 Replaces: mariadb-backup-10.1,
           mariadb-backup-10.2,
           mariadb-client-10.1
-Depends: mariadb-client-core-10.7 (= ${binary:Version}),
+Depends: mariadb-client-core (= ${binary:Version}),
          ${misc:Depends},
          ${shlibs:Depends}
 Description: Backup tool for MariaDB server
@@ -777,7 +818,7 @@ Description: Backup tool for MariaDB server
 Package: mariadb-plugin-connect
 Architecture: any
 Depends: libxml2,
-         mariadb-server-10.7 (= ${server:Version}),
+         mariadb-server (= ${server:Version}),
          unixodbc,
          ${misc:Depends},
          ${shlibs:Depends}
@@ -800,7 +841,7 @@ Description: Connect storage engine for MariaDB
 Package: mariadb-plugin-s3
 Architecture: any
 Depends: libcurl4,
-         mariadb-server-10.7 (= ${server:Version}),
+         mariadb-server (= ${server:Version}),
          ${misc:Depends},
          ${shlibs:Depends}
 Description: Amazon S3 archival storage engine for MariaDB
@@ -810,7 +851,7 @@ Description: Amazon S3 archival storage engine for MariaDB
 
 Package: mariadb-plugin-rocksdb
 Architecture: amd64 arm64 mips64el ppc64el
-Depends: mariadb-server-10.7 (= ${server:Version}),
+Depends: mariadb-server (= ${server:Version}),
          python3,
          rocksdb-tools,
          ${misc:Depends},
@@ -830,7 +871,7 @@ Description: RocksDB storage engine for MariaDB
 Package: mariadb-plugin-oqgraph
 Architecture: any
 Depends: libjudydebian1,
-         mariadb-server-10.7 (= ${server:Version}),
+         mariadb-server (= ${server:Version}),
          ${misc:Depends},
          ${shlibs:Depends}
 Breaks: mariadb-oqgraph-engine-10.0,
@@ -850,7 +891,7 @@ Description: OQGraph storage engine for MariaDB
 
 Package: mariadb-plugin-mroonga
 Architecture: any-alpha any-amd64 any-arm any-arm64 any-i386 any-ia64 any-mips64el any-mips64r6el any-mipsel any-mipsr6el any-nios2 any-powerpcel any-ppc64el any-sh3 any-sh4 any-tilegx
-Depends: mariadb-server-10.7 (= ${server:Version}),
+Depends: mariadb-server (= ${server:Version}),
          ${misc:Depends},
          ${shlibs:Depends}
 Breaks: mariadb-server-10.0,
@@ -870,7 +911,7 @@ Description: Mroonga storage engine for MariaDB
 
 Package: mariadb-plugin-spider
 Architecture: any
-Depends: mariadb-server-10.7 (= ${server:Version}),
+Depends: mariadb-server (= ${server:Version}),
          ${misc:Depends},
          ${shlibs:Depends}
 Breaks: mariadb-server-10.0,
@@ -892,7 +933,7 @@ Description: Spider storage engine for MariaDB
 Package: mariadb-plugin-gssapi-server
 Architecture: any
 Depends: libgssapi-krb5-2,
-         mariadb-server-10.7,
+         mariadb-server,
          ${misc:Depends},
          ${shlibs:Depends}
 Breaks: mariadb-gssapi-server-10.1,
@@ -913,7 +954,7 @@ Package: mariadb-plugin-gssapi-client
 Architecture: any
 Multi-Arch: same
 Depends: libgssapi-krb5-2,
-         mariadb-client-10.7 (= ${binary:Version}),
+         mariadb-client (= ${binary:Version}),
          ${misc:Depends},
          ${shlibs:Depends}
 Breaks: mariadb-gssapi-client-10.1,
@@ -933,7 +974,7 @@ Description: GSSAPI authentication plugin for MariaDB client
 Package: mariadb-plugin-cracklib-password-check
 Architecture: any
 Depends: libcrack2 (>= 2.9.0),
-         mariadb-server-10.7,
+         mariadb-server,
          ${misc:Depends},
          ${shlibs:Depends}
 Description: CrackLib Password Validation Plugin for MariaDB
@@ -942,9 +983,19 @@ Description: CrackLib Password Validation Plugin for MariaDB
  .
  Install and configure this to enforce stronger passwords for MariaDB users.
 
+Package: mariadb-plugin-hashicorp-key-management
+Architecture: any
+Depends: libcurl4,
+         mariadb-server (= ${server:Version}),
+         ${misc:Depends},
+         ${shlibs:Depends}
+Description: Hashicorp Key Management plugin for MariaDB
+ This encryption plugin uses Hashicorp Vault for storing encryption
+ keys for MariaDB Data-at-Rest encryption.
+
 Package: mariadb-plugin-provider-bzip2
 Architecture: any
-Depends: mariadb-server-10.7,
+Depends: mariadb-server,
          ${misc:Depends},
          ${shlibs:Depends}
 Description: BZip2 compression support in the server and storage engines
@@ -958,7 +1009,7 @@ Description: BZip2 compression support in the server and storage engines
 
 Package: mariadb-plugin-provider-lz4
 Architecture: any
-Depends: mariadb-server-10.7,
+Depends: mariadb-server,
          ${misc:Depends},
          ${shlibs:Depends}
 Description: LZ4 compression support in the server and storage engines
@@ -972,7 +1023,7 @@ Description: LZ4 compression support in the server and storage engines
 
 Package: mariadb-plugin-provider-lzma
 Architecture: any
-Depends: mariadb-server-10.7,
+Depends: mariadb-server,
          ${misc:Depends},
          ${shlibs:Depends}
 Description: LZMA compression support in the server and storage engines
@@ -986,7 +1037,7 @@ Description: LZMA compression support in the server and storage engines
 
 Package: mariadb-plugin-provider-lzo
 Architecture: any
-Depends: mariadb-server-10.7,
+Depends: mariadb-server,
          ${misc:Depends},
          ${shlibs:Depends}
 Description: LZO compression support in the server and storage engines
@@ -1000,7 +1051,7 @@ Description: LZO compression support in the server and storage engines
 
 Package: mariadb-plugin-provider-snappy
 Architecture: any
-Depends: mariadb-server-10.7,
+Depends: mariadb-server,
          ${misc:Depends},
          ${shlibs:Depends}
 Description: Snappy compression support in the server and storage engines
@@ -1014,8 +1065,8 @@ Description: Snappy compression support in the server and storage engines
 
 Package: mariadb-test
 Architecture: any
-Depends: mariadb-client-10.7 (= ${binary:Version}),
-         mariadb-server-10.7 (= ${server:Version}),
+Depends: mariadb-client (= ${binary:Version}),
+         mariadb-server (= ${server:Version}),
          mariadb-test-data (= ${source:Version}),
          virtual-mysql-testsuite,
          ${misc:Depends},

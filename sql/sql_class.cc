@@ -846,7 +846,7 @@ THD::THD(my_thread_id id, bool is_wsrep_applier)
   wsrep_info[sizeof(wsrep_info) - 1] = '\0'; /* make sure it is 0-terminated */
 #endif
   /* Call to init() below requires fully initialized Open_tables_state. */
-  reset_open_tables_state(this);
+  reset_open_tables_state();
 
   init();
   debug_sync_init_thread(this);
@@ -4579,7 +4579,7 @@ void THD::reset_n_backup_open_tables_state(Open_tables_backup *backup)
   DBUG_ENTER("reset_n_backup_open_tables_state");
   backup->set_open_tables_state(this);
   backup->mdl_system_tables_svp= mdl_context.mdl_savepoint();
-  reset_open_tables_state(this);
+  reset_open_tables_state();
   state_flags|= Open_tables_state::BACKUPS_AVAIL;
   DBUG_VOID_RETURN;
 }
@@ -5330,6 +5330,16 @@ thd_rpl_deadlock_check(MYSQL_THD thd, MYSQL_THD other_thd)
     return 0;
   if (rgi->gtid_sub_id > other_rgi->gtid_sub_id)
     return 0;
+  if (rgi->finish_event_group_called || other_rgi->finish_event_group_called)
+  {
+    /*
+      If either of two transactions has already performed commit
+      (e.g split ALTER, asserted below) there won't be any deadlock.
+    */
+    DBUG_ASSERT(rgi->sa_info || other_rgi->sa_info);
+
+    return 0;
+  }
   /*
     This transaction is about to wait for another transaction that is required
     by replication binlog order to commit after. This would cause a deadlock.
@@ -7341,6 +7351,26 @@ int THD::binlog_flush_pending_rows_event(bool stmt_end, bool is_transactional)
   }
 
   DBUG_RETURN(error);
+}
+
+
+/*
+  DML that doesn't change the table normally is not logged,
+  but it needs to be logged if it auto-created a partition as a side effect.
+*/
+bool THD::binlog_for_noop_dml(bool transactional_table)
+{
+  if (log_current_statement())
+  {
+    reset_unsafe_warnings();
+    if (binlog_query(THD::STMT_QUERY_TYPE, query(), query_length(),
+                      transactional_table, FALSE, FALSE, 0) > 0)
+    {
+      my_error(ER_ERROR_ON_WRITE, MYF(0), "binary log", -1);
+      return true;
+    }
+  }
+  return false;
 }
 
 

@@ -116,10 +116,11 @@ struct mtr_t {
   /** Commit a mini-transaction that did not modify any pages,
   but generated some redo log on a higher level, such as
   FILE_MODIFY records and an optional FILE_CHECKPOINT marker.
-  The caller must hold log_sys.mutex.
+  The caller must hold exclusive log_sys.latch.
   This is to be used at log_checkpoint().
-  @param checkpoint_lsn   the log sequence number of a checkpoint, or 0 */
-  void commit_files(lsn_t checkpoint_lsn= 0);
+  @param checkpoint_lsn   the log sequence number of a checkpoint, or 0
+  @return current LSN */
+  lsn_t commit_files(lsn_t checkpoint_lsn= 0);
 
   /** @return mini-transaction savepoint (current size of m_memo) */
   ulint get_savepoint() const { ut_ad(is_active()); return m_memo.size(); }
@@ -595,6 +596,9 @@ public:
   @return number of buffer count added by this mtr */
   uint32_t get_fix_count(const buf_block_t *block) const;
 
+  /** Note that log_sys.latch is no longer being held exclusively. */
+  void flag_wr_unlock() noexcept { ut_ad(m_latch_ex); m_latch_ex= false; }
+
   /** type of page flushing is needed during commit() */
   enum page_flush_ahead
   {
@@ -632,6 +636,13 @@ private:
   @param type   extended record subtype; @see mrec_ext_t */
   inline void log_write_extended(const buf_block_t &block, byte type);
 
+  /** Write a FILE_MODIFY record when a non-predefined persistent
+  tablespace was modified for the first time since fil_names_clear(). */
+  ATTRIBUTE_NOINLINE ATTRIBUTE_COLD void name_write();
+
+  /** Encrypt the log */
+  ATTRIBUTE_NOINLINE void encrypt();
+
   /** Append the redo log records to the redo log buffer.
   @return {start_lsn,flush_ahead} */
   std::pair<lsn_t,page_flush_ahead> do_write();
@@ -639,7 +650,7 @@ private:
   /** Append the redo log records to the redo log buffer.
   @param len   number of bytes to write
   @return {start_lsn,flush_ahead} */
-  inline std::pair<lsn_t,page_flush_ahead> finish_write(ulint len);
+  std::pair<lsn_t,page_flush_ahead> finish_write(size_t len);
 
   /** Release the resources */
   inline void release_resources();
@@ -663,7 +674,7 @@ private:
   /** whether freeing_tree() has been called */
   bool m_freeing_tree= false;
 #endif
-
+private:
   /** The page of the most recent m_log record written, or NULL */
   const buf_page_t* m_last;
   /** The current byte offset in m_last, or 0 */
@@ -678,12 +689,18 @@ private:
   /** whether at least one previously clean buffer pool page was written to */
   uint16_t m_made_dirty:1;
 
+  /** whether log_sys.latch is locked exclusively */
+  uint16_t m_latch_ex:1;
+
   /** whether change buffer is latched; only needed in non-debug builds
   to suppress some read-ahead operations, @see ibuf_inside() */
   uint16_t m_inside_ibuf:1;
 
   /** whether the pages has been trimmed */
   uint16_t m_trim_pages:1;
+
+  /** CRC-32C of m_log */
+  uint32_t m_crc;
 
 #ifdef UNIV_DEBUG
   /** Persistent user tablespace associated with the

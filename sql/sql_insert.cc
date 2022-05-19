@@ -1212,6 +1212,7 @@ values_loop_end:
 
     if (error <= 0 ||
         thd->transaction->stmt.modified_non_trans_table ||
+        thd->log_current_statement() ||
 	was_insert_delayed)
     {
       if(WSREP_EMULATE_BINLOG(thd) || mysql_bin_log.is_open())
@@ -1234,8 +1235,8 @@ values_loop_end:
         else
           errcode= query_error_code(thd, thd->killed == NOT_KILLED);
 
-        ScopedStatementReplication scoped_stmt_rpl(
-            table->versioned(VERS_TRX_ID) ? thd : NULL);
+        StatementBinlog stmt_binlog(thd, table->versioned(VERS_TRX_ID) ||
+                                         thd->binlog_need_stmt_format(transactional_table));
        /* bug#22725:
 
 	A query which per-row-loop can not be interrupted with
@@ -4228,7 +4229,8 @@ bool select_insert::prepare_eof()
     ha_autocommit_or_rollback() is issued below.
   */
   if ((WSREP_EMULATE_BINLOG(thd) || mysql_bin_log.is_open()) &&
-      (likely(!error) || thd->transaction->stmt.modified_non_trans_table))
+      (likely(!error) || thd->transaction->stmt.modified_non_trans_table ||
+       thd->log_current_statement()))
   {
     int errcode= 0;
     int res;
@@ -4236,6 +4238,8 @@ bool select_insert::prepare_eof()
       thd->clear_error();
     else
       errcode= query_error_code(thd, killed_status == NOT_KILLED);
+    StatementBinlog stmt_binlog(thd, !can_rollback_data() &&
+                                thd->binlog_need_stmt_format(trans_table));
     res= thd->binlog_query(THD::ROW_QUERY_TYPE,
                            thd->query(), thd->query_length(),
                            trans_table, FALSE, FALSE, errcode);
@@ -4349,13 +4353,15 @@ void select_insert::abort_result_set()
     changed= (info.copied || info.deleted || info.updated);
     transactional_table= table->file->has_transactions_and_rollback();
     if (thd->transaction->stmt.modified_non_trans_table ||
-        thd->log_current_statement)
+        thd->log_current_statement())
     {
         if (!can_rollback_data())
           thd->transaction->all.modified_non_trans_table= TRUE;
 
         if(WSREP_EMULATE_BINLOG(thd) || mysql_bin_log.is_open())
         {
+          StatementBinlog stmt_binlog(thd, !can_rollback_data() &&
+                                      thd->binlog_need_stmt_format(transactional_table));
           int errcode= query_error_code(thd, thd->killed == NOT_KILLED);
           int res;
           /* error of writing binary log is ignored */
@@ -5230,7 +5236,7 @@ void select_create::abort_result_set()
 
     drop_open_table(thd, table, &create_table->db, &create_table->table_name);
     table=0;                                    // Safety
-    if (thd->log_current_statement)
+    if (thd->log_current_statement())
     {
       if (mysql_bin_log.is_open())
       {

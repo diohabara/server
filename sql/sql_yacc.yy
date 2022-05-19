@@ -193,14 +193,6 @@ void _CONCAT_UNDERSCORED(turn_parser_debug_on,yyparse)()
 #endif
 
 
-#define bincmp_collation(X,Y)           \
-  do                                    \
-  {                                     \
-     if (unlikely(Lex->set_bincmp(X,Y))) \
-       MYSQL_YYABORT;                   \
-  } while(0)
-
-
 %}
 %union {
   int  num;
@@ -221,6 +213,7 @@ void _CONCAT_UNDERSCORED(turn_parser_debug_on,yyparse)()
   Lex_length_and_dec_st Lex_length_and_dec;
   Lex_cast_type_st Lex_cast_type;
   Lex_field_type_st Lex_field_type;
+  Lex_charset_collation_st Lex_charset_collation;
   Lex_dyncol_type_st Lex_dyncol_type;
   Lex_for_loop_st for_loop;
   Lex_for_loop_bounds_st for_loop_bounds;
@@ -290,6 +283,7 @@ void _CONCAT_UNDERSCORED(turn_parser_debug_on,yyparse)()
   class With_element_head *with_element_head;
   class With_clause *with_clause;
   class Virtual_column_info *virtual_column;
+  engine_option_value *engine_option_value_ptr;
 
   handlerton *db_type;
   st_select_lex *select_lex;
@@ -1363,7 +1357,7 @@ bool my_yyoverflow(short **a, YYSTYPE **b, size_t *yystacksize);
         wild_and_where
 
 %type <const_simple_string>
-        field_length opt_field_length
+        field_length_str
         opt_compression_method
 
 %type <string>
@@ -1383,6 +1377,15 @@ bool my_yyoverflow(short **a, YYSTYPE **b, size_t *yystacksize);
         field_type_temporal
         field_type_misc
         json_table_field_type
+
+%type <Lex_charset_collation>
+        binary
+        opt_binary
+        opt_binary_and_compression
+        attribute
+        attribute_list
+        field_def
+
 
 %type <Lex_dyncol_type> opt_dyncol_type dyncol_type
         numeric_dyncol_type temporal_dyncol_type string_dyncol_type
@@ -1494,6 +1497,8 @@ bool my_yyoverflow(short **a, YYSTYPE **b, size_t *yystacksize);
         condition_number
         opt_versioning_interval_start
 
+%type <num> opt_vers_auto_part
+
 %type <item_param> param_marker
 
 %type <item_num>
@@ -1563,6 +1568,8 @@ bool my_yyoverflow(short **a, YYSTYPE **b, size_t *yystacksize);
 %type <Lex_cast_type> cast_type cast_type_numeric cast_type_temporal
 
 %type <Lex_length_and_dec> precision opt_precision float_options
+                           field_length opt_field_length
+                           field_scale opt_field_scale
 
 %type <lex_user> user grant_user grant_role user_or_role current_role
                  admin_option_for_role user_maybe_role
@@ -1571,8 +1578,7 @@ bool my_yyoverflow(short **a, YYSTYPE **b, size_t *yystacksize);
                   text_or_password
 
 %type <charset>
-        opt_collate
-        collate
+        opt_collate_or_default
         charset_name
         charset_or_alias
         charset_name_or_default
@@ -1654,14 +1660,13 @@ bool my_yyoverflow(short **a, YYSTYPE **b, size_t *yystacksize);
         delete_limit_clause fields opt_values values
         no_braces_with_names opt_values_with_names values_with_names
         procedure_list procedure_list2 procedure_item
-        field_def handler opt_generated_always
+        handler opt_generated_always
         opt_ignore opt_column opt_restrict
         grant revoke set lock unlock string_list
-        opt_binary table_lock_list table_lock
+        table_lock_list table_lock
         ref_list opt_match_clause opt_on_update_delete use
         opt_delete_options opt_delete_option varchar nchar nvarchar
         opt_outer table_list table_name table_alias_ref_list table_alias_ref
-        attribute attribute_list
         compressed_deprecated_data_type_attribute
         compressed_deprecated_column_attribute
         grant_list
@@ -1688,6 +1693,7 @@ bool my_yyoverflow(short **a, YYSTYPE **b, size_t *yystacksize);
         normal_key_options normal_key_opts all_key_opt 
         spatial_key_options fulltext_key_options normal_key_opt 
         fulltext_key_opt spatial_key_opt fulltext_key_opts spatial_key_opts
+        explain_for_connection
 	keep_gcc_happy
         key_using_alg
         part_column_list
@@ -1737,8 +1743,8 @@ bool my_yyoverflow(short **a, YYSTYPE **b, size_t *yystacksize);
 %type <num> sp_handler_type sp_hcond_list
 %type <spcondvalue> sp_cond sp_hcond sqlstate signal_value opt_signal_value
 %type <spname> sp_name
-%type <spvar> sp_param_name sp_param_name_and_type
-%type <spvar> sp_param_name_and_type_anchored
+%type <spvar> sp_param_name sp_param_name_and_mode sp_param
+%type <spvar> sp_param_anchored
 %type <for_loop> sp_for_loop_index_and_bounds
 %type <for_loop_bounds> sp_for_loop_bounds
 %type <trim> trim_operands
@@ -1791,6 +1797,7 @@ bool my_yyoverflow(short **a, YYSTYPE **b, size_t *yystacksize);
 %type <vers_range_unit> opt_history_unit
 %type <vers_history_point> history_point
 %type <vers_column_versioning> with_or_without_system
+%type <engine_option_value_ptr> engine_defined_option;
 
 %ifdef MARIADB
 %type <NONE> sp_tail_standalone
@@ -1937,6 +1944,7 @@ verb_clause:
         | do
         | drop
         | execute
+        | explain_for_connection
         | flush
         | get_diagnostics
         | grant
@@ -3061,8 +3069,8 @@ sp_fdparam_list:
         ;
 
 sp_fdparams:
-          sp_fdparams ',' sp_param_name_and_type
-        | sp_param_name_and_type
+          sp_fdparams ',' sp_param
+        | sp_param
         ;
 
 sp_param_name:
@@ -3073,20 +3081,6 @@ sp_param_name:
           }
         ;
 
-sp_param_name_and_type:
-          sp_param_name field_type
-          {
-            if (unlikely(Lex->sp_param_fill_definition($$= $1, $2)))
-              MYSQL_YYABORT;
-          }
-        | sp_param_name ROW_SYM row_type_body
-          {
-            if (unlikely(Lex->sphead->spvar_fill_row(thd, $$= $1, $3)))
-              MYSQL_YYABORT;
-          }
-        | sp_param_name_and_type_anchored
-        ;
-
 /* Stored PROCEDURE parameter declaration list */
 sp_pdparam_list:
           /* Empty */
@@ -3094,8 +3088,8 @@ sp_pdparam_list:
         ;
 
 sp_pdparams:
-          sp_pdparams ',' sp_pdparam
-        | sp_pdparam
+          sp_pdparams ',' sp_param
+        | sp_param
         ;
 
 sp_parameter_type:
@@ -3156,7 +3150,7 @@ optionally_qualified_column_ident:
 row_field_definition:
           row_field_name field_type
           {
-            Lex->last_field->set_attributes(thd, $2, Lex->charset,
+            Lex->last_field->set_attributes(thd, $2,
                                             COLUMN_DEFINITION_ROUTINE_LOCAL);
           }
         ;
@@ -3189,7 +3183,7 @@ sp_decl_variable_list:
           sp_decl_idents_init_vars
           field_type
           {
-            Lex->last_field->set_attributes(thd, $2, Lex->charset,
+            Lex->last_field->set_attributes(thd, $2,
                                             COLUMN_DEFINITION_ROUTINE_LOCAL);
           }
           sp_opt_default
@@ -5052,7 +5046,7 @@ sub_part_definition:
             part_info->use_default_num_subpartitions= FALSE;
             part_info->count_curr_subparts++;
           }
-          sub_name opt_part_options {}
+          sub_name opt_subpart_options {}
         ;
 
 sub_name:
@@ -5066,15 +5060,34 @@ sub_name:
 
 opt_part_options:
          /* empty */ {}
-       | opt_part_option_list {}
+       | part_option_list {}
        ;
 
-opt_part_option_list:
-         opt_part_option_list opt_part_option {}
-       | opt_part_option {}
+part_option_list:
+         part_option_list part_option {}
+       | part_option {}
        ;
 
-opt_part_option:
+part_option:
+          server_part_option {}
+        | engine_defined_option
+          {
+            $1->link(&Lex->part_info->curr_part_elem->option_list,
+                     &Lex->option_list_last);
+          }
+        ;
+
+opt_subpart_options:
+         /* empty */ {}
+       | subpart_option_list {}
+       ;
+
+subpart_option_list:
+         subpart_option_list server_part_option {}
+       | server_part_option {}
+       ;
+
+server_part_option:
           TABLESPACE opt_equal ident_or_text
           { /* Compatibility with MySQL */ }
         | opt_storage ENGINE_SYM opt_equal storage_engines
@@ -5105,24 +5118,20 @@ opt_part_option:
 
 opt_versioning_rotation:
          /* empty */ {}
-       | INTERVAL_SYM expr interval opt_versioning_interval_start
+       | INTERVAL_SYM expr interval opt_versioning_interval_start opt_vers_auto_part
          {
            partition_info *part_info= Lex->part_info;
            const char *table_name= Lex->create_last_non_select_table->table_name.str;
-           if (unlikely(part_info->vers_set_interval(thd, $2, $3, $4, table_name)))
+           if (unlikely(part_info->vers_set_interval(thd, $2, $3, $4, $5, table_name)))
              MYSQL_YYABORT;
          }
-       | LIMIT ulonglong_num
-       {
-         partition_info *part_info= Lex->part_info;
-         if (unlikely(part_info->vers_set_limit($2)))
+       | LIMIT ulonglong_num opt_vers_auto_part
          {
-           my_error(ER_PART_WRONG_VALUE, MYF(0),
-                    Lex->create_last_non_select_table->table_name.str,
-                    "LIMIT");
-           MYSQL_YYABORT;
+           partition_info *part_info= Lex->part_info;
+           const char *table_name= Lex->create_last_non_select_table->table_name.str;
+           if (unlikely(part_info->vers_set_limit($2, $3, table_name)))
+             MYSQL_YYABORT;
          }
-       }
        ;
 
 
@@ -5137,6 +5146,16 @@ opt_versioning_interval_start:
          }
        ;
 
+opt_vers_auto_part:
+         /* empty */
+         {
+           $$= 0;
+         }
+       | AUTO_SYM
+         {
+           $$= 1;
+         }
+       ;
 /*
  End of partition parser part
 */
@@ -5436,42 +5455,43 @@ create_table_option:
 	    Lex->create_info.used_fields|= HA_CREATE_USED_TRANSACTIONAL;
             Lex->create_info.transactional= $3;
           }
-        | IDENT_sys equal TEXT_STRING_sys
+        | engine_defined_option
+          {
+            $1->link(&Lex->create_info.option_list, &Lex->option_list_last);
+          }
+        | SEQUENCE_SYM opt_equal choice
+          {
+            Lex->create_info.used_fields|= HA_CREATE_USED_SEQUENCE;
+            Lex->create_info.sequence= ($3 == HA_CHOICE_YES);
+          }
+        | versioning_option
+        ;
+
+engine_defined_option:
+          IDENT_sys equal TEXT_STRING_sys
           {
             if (unlikely($3.length > ENGINE_OPTION_MAX_LENGTH))
               my_yyabort_error((ER_VALUE_TOO_LONG, MYF(0), $1.str));
-            (void) new (thd->mem_root)
-                   engine_option_value($1, $3, true,
-                                       &Lex->create_info.option_list,
-                                       &Lex->option_list_last);
+            $$= new (thd->mem_root) engine_option_value($1, $3, true);
+            MYSQL_YYABORT_UNLESS($$);
           }
         | IDENT_sys equal ident
           {
             if (unlikely($3.length > ENGINE_OPTION_MAX_LENGTH))
               my_yyabort_error((ER_VALUE_TOO_LONG, MYF(0), $1.str));
-            (void) new (thd->mem_root)
-                   engine_option_value($1, $3, false,
-                                       &Lex->create_info.option_list,
-                                       &Lex->option_list_last);
+            $$= new (thd->mem_root) engine_option_value($1, $3, false);
+            MYSQL_YYABORT_UNLESS($$);
           }
         | IDENT_sys equal real_ulonglong_num
           {
-            (void) new (thd->mem_root)
-                   engine_option_value($1, $3, &Lex->create_info.option_list,
-                                       &Lex->option_list_last, thd->mem_root);
+            $$= new (thd->mem_root) engine_option_value($1, $3, thd->mem_root);
+            MYSQL_YYABORT_UNLESS($$);
           }
         | IDENT_sys equal DEFAULT
           {
-            (void) new (thd->mem_root)
-                   engine_option_value($1, &Lex->create_info.option_list,
-                                       &Lex->option_list_last);
+            $$= new (thd->mem_root) engine_option_value($1);
+            MYSQL_YYABORT_UNLESS($$);
           }
-        | SEQUENCE_SYM opt_equal choice
-          {
-	    Lex->create_info.used_fields|= HA_CREATE_USED_SEQUENCE;
-            Lex->create_info.sequence= ($3 == HA_CHOICE_YES);
-	  }
-        | versioning_option
         ;
 
 opt_versioning_option:
@@ -5735,7 +5755,7 @@ field_spec:
             if (unlikely(!f))
               MYSQL_YYABORT;
 
-            lex->init_last_field(f, &$1, NULL);
+            lex->init_last_field(f, &$1);
             $<create_field>$= f;
             lex->parsing_options.lookup_keywords_after_qualifier= true;
           }
@@ -5763,10 +5783,16 @@ field_spec:
 field_type_or_serial:
           qualified_field_type
           {
-             Lex->last_field->set_attributes(thd, $1, Lex->charset,
+             Lex->last_field->set_attributes(thd, $1,
                                              COLUMN_DEFINITION_TABLE_FIELD);
           }
           field_def
+          {
+            Lex_charset_collation tmp= $1.lex_charset_collation();
+            if (tmp.merge_charset_clause_and_collate_clause($3))
+              MYSQL_YYABORT;
+            Lex->last_field->set_lex_charset_collation(tmp);
+          }
         | SERIAL_SYM
           {
             Lex->last_field->set_handler(&type_handler_ulonglong);
@@ -5798,25 +5824,34 @@ opt_asrow_attribute_list:
         ;
 
 field_def:
-          /* empty */ { }
+          /* empty */     { $$.init(); }
         | attribute_list
-        | attribute_list compressed_deprecated_column_attribute
+        | attribute_list compressed_deprecated_column_attribute { $$= $1; }
         | attribute_list compressed_deprecated_column_attribute attribute_list
+          {
+            if (($$= $1).merge_collate_clause_and_collate_clause($3))
+              MYSQL_YYABORT;
+          }
         | opt_generated_always AS virtual_column_func
          {
            Lex->last_field->vcol_info= $3;
            Lex->last_field->flags&= ~NOT_NULL_FLAG; // undo automatic NOT NULL for timestamps
          }
           vcol_opt_specifier vcol_opt_attribute
+          {
+            $$.init();
+          }
         | opt_generated_always AS ROW_SYM START_SYM opt_asrow_attribute
           {
             if (Lex->last_field_generated_always_as_row_start())
               MYSQL_YYABORT;
+            $$.init();
           }
         | opt_generated_always AS ROW_SYM END opt_asrow_attribute
           {
             if (Lex->last_field_generated_always_as_row_end())
               MYSQL_YYABORT;
+            $$.init();
           }
         ;
 
@@ -5989,14 +6024,12 @@ field_type_numeric:
         | FLOAT_SYM float_options last_field_options
           {
             $$.set(&type_handler_float, $2);
-            if ($2.length() && !$2.dec())
+            if ($2.has_explicit_length() && !$2.has_explicit_dec())
             {
-              int err;
-              ulonglong tmp_length= my_strtoll10($2.length(), NULL, &err);
-              if (unlikely(err || tmp_length > PRECISION_FOR_DOUBLE))
+              if (unlikely($2.length() > PRECISION_FOR_DOUBLE))
                 my_yyabort_error((ER_WRONG_FIELD_SPEC, MYF(0),
                                   Lex->last_field->field_name.str));
-              if (tmp_length > PRECISION_FOR_FLOAT)
+              if ($2.length() > PRECISION_FOR_FLOAT)
                 $$.set(&type_handler_double);
               else
                 $$.set(&type_handler_float);
@@ -6008,17 +6041,17 @@ field_type_numeric:
           }
         | BOOL_SYM
           {
-            $$.set(&type_handler_stiny, "1");
+            $$.set_handler_length(&type_handler_stiny, 1);
           }
         | BOOLEAN_SYM
           {
-            $$.set(&type_handler_stiny, "1");
+            $$.set_handler_length(&type_handler_stiny, 1);
           }
         | DECIMAL_SYM float_options last_field_options
           { $$.set(&type_handler_newdecimal, $2);}
         | NUMBER_ORACLE_SYM float_options last_field_options
           {
-            if ($2.length() != 0)
+            if ($2.has_explicit_length())
               $$.set(&type_handler_newdecimal, $2);
             else
               $$.set(&type_handler_double);
@@ -6031,63 +6064,58 @@ field_type_numeric:
 
 
 opt_binary_and_compression:
-          /* empty */
-        | binary
-        | binary compressed_deprecated_data_type_attribute
-        | compressed opt_binary
+          /* empty */                                      { $$.init(); }
+        | binary                                           { $$= $1; }
+        | binary compressed_deprecated_data_type_attribute { $$= $1; }
+        | compressed opt_binary                            { $$= $2; }
         ;
 
 field_type_string:
           char opt_field_length opt_binary
           {
-            $$.set(&type_handler_string, $2);
+            $$.set(&type_handler_string, $2, $3);
           }
         | nchar opt_field_length opt_bin_mod
           {
-            $$.set(&type_handler_string, $2);
-            bincmp_collation(national_charset_info, $3);
+            $$.set(&type_handler_string, $2,
+                   Lex_charset_collation::national($3));
           }
         | BINARY opt_field_length
           {
-            Lex->charset=&my_charset_bin;
-            $$.set(&type_handler_string, $2);
+            $$.set(&type_handler_string, $2, &my_charset_bin);
           }
         | varchar opt_field_length opt_binary_and_compression
           {
-            $$.set(&type_handler_varchar, $2);
+            $$.set(&type_handler_varchar, $2, $3);
           }
         | VARCHAR2_ORACLE_SYM opt_field_length opt_binary_and_compression
           {
-            $$.set(&type_handler_varchar, $2);
+            $$.set(&type_handler_varchar, $2, $3);
           }
         | nvarchar opt_field_length opt_compressed opt_bin_mod
           {
-            $$.set(&type_handler_varchar, $2);
-            bincmp_collation(national_charset_info, $4);
+            $$.set(&type_handler_varchar, $2,
+                   Lex_charset_collation::national($4));
           }
         | VARBINARY opt_field_length opt_compressed
           {
-            Lex->charset=&my_charset_bin;
-            $$.set(&type_handler_varchar, $2);
+            $$.set(&type_handler_varchar, $2, &my_charset_bin);
           }
         | RAW_ORACLE_SYM opt_field_length opt_compressed
           {
-            Lex->charset= &my_charset_bin;
-            $$.set(&type_handler_varchar, $2);
+            $$.set(&type_handler_varchar, $2, &my_charset_bin);
           }
         ;
 
 field_type_temporal:
           YEAR_SYM opt_field_length last_field_options
           {
-            if ($2)
+            if ($2.has_explicit_length())
             {
-              errno= 0;
-              ulong length= strtoul($2, NULL, 10);
-              if (errno == 0 && length <= MAX_FIELD_BLOBLENGTH && length != 4)
+              if ($2.length() != 4)
               {
                 char buff[sizeof("YEAR()") + MY_INT64_NUM_DECIMAL_DIGITS + 1];
-                my_snprintf(buff, sizeof(buff), "YEAR(%lu)", length);
+                my_snprintf(buff, sizeof(buff), "YEAR(%u)", (uint) $2.length());
                 push_warning_printf(thd, Sql_condition::WARN_LEVEL_NOTE,
                                     ER_WARN_DEPRECATED_SYNTAX,
                                     ER_THD(thd, ER_WARN_DEPRECATED_SYNTAX),
@@ -6121,65 +6149,57 @@ field_type_temporal:
 field_type_lob:
           TINYBLOB opt_compressed
           {
-            Lex->charset=&my_charset_bin;
-            $$.set(&type_handler_tiny_blob);
+            $$.set(&type_handler_tiny_blob, &my_charset_bin);
           }
         | BLOB_MARIADB_SYM opt_field_length opt_compressed
           {
-            Lex->charset=&my_charset_bin;
-            $$.set(&type_handler_blob, $2);
+            $$.set(&type_handler_blob, $2, &my_charset_bin);
           }
         | BLOB_ORACLE_SYM field_length opt_compressed
           {
-            Lex->charset=&my_charset_bin;
-            $$.set(&type_handler_blob, $2);
+            $$.set(&type_handler_blob, $2, &my_charset_bin);
           }
         | BLOB_ORACLE_SYM opt_compressed
           {
-            Lex->charset=&my_charset_bin;
-            $$.set(&type_handler_long_blob);
+            $$.set(&type_handler_long_blob, &my_charset_bin);
           }
         | MEDIUMBLOB opt_compressed
           {
-            Lex->charset=&my_charset_bin;
-            $$.set(&type_handler_medium_blob);
+            $$.set(&type_handler_medium_blob, &my_charset_bin);
           }
         | LONGBLOB opt_compressed
           {
-            Lex->charset=&my_charset_bin;
-            $$.set(&type_handler_long_blob);
+            $$.set(&type_handler_long_blob, &my_charset_bin);
           }
         | LONG_SYM VARBINARY opt_compressed
           {
-            Lex->charset=&my_charset_bin;
-            $$.set(&type_handler_medium_blob);
+            $$.set(&type_handler_medium_blob, &my_charset_bin);
           }
         | LONG_SYM varchar opt_binary_and_compression
-          { $$.set(&type_handler_medium_blob); }
+          { $$.set(&type_handler_medium_blob, $3); }
         | TINYTEXT opt_binary_and_compression
-          { $$.set(&type_handler_tiny_blob); }
+          { $$.set(&type_handler_tiny_blob, $2); }
         | TEXT_SYM opt_field_length opt_binary_and_compression
-          { $$.set(&type_handler_blob, $2); }
+          { $$.set(&type_handler_blob, $2, $3); }
         | MEDIUMTEXT opt_binary_and_compression
-          { $$.set(&type_handler_medium_blob); }
+          { $$.set(&type_handler_medium_blob, $2); }
         | LONGTEXT opt_binary_and_compression
-          { $$.set(&type_handler_long_blob); }
+          { $$.set(&type_handler_long_blob, $2); }
         | CLOB_ORACLE_SYM opt_binary_and_compression
-          { $$.set(&type_handler_long_blob); }
+          { $$.set(&type_handler_long_blob, $2); }
         | LONG_SYM opt_binary_and_compression
-          { $$.set(&type_handler_medium_blob); }
+          { $$.set(&type_handler_medium_blob, $2); }
         | JSON_SYM opt_compressed
           {
-            Lex->charset= &my_charset_utf8mb4_bin;
-            $$.set(&type_handler_long_blob_json);
+            $$.set(&type_handler_long_blob_json, &my_charset_utf8mb4_bin);
           }
         ;
 
 field_type_misc:
           ENUM '(' string_list ')' opt_binary
-          { $$.set(&type_handler_enum); }
+          { $$.set(&type_handler_enum, $5); }
         | SET '(' string_list ')' opt_binary
-          { $$.set(&type_handler_set); }
+          { $$.set(&type_handler_set, $5); }
         ;
 
 char:
@@ -6234,9 +6254,9 @@ srid_option:
         ;
 
 float_options:
-          /* empty */  { $$.set(0, 0);  }
-        | field_length { $$.set($1, 0); }
-        | precision    { $$= $1; }
+          /* empty */  { $$.reset();  }
+        | field_length
+        | precision
         ;
 
 precision:
@@ -6256,54 +6276,70 @@ last_field_options:
           field_options { Lex->last_field->flags|= ($$= $1); }
         ;
 
-field_length:
+field_length_str:
           '(' LONG_NUM ')'      { $$= $2.str; }
         | '(' ULONGLONG_NUM ')' { $$= $2.str; }
         | '(' DECIMAL_NUM ')'   { $$= $2.str; }
         | '(' NUM ')'           { $$= $2.str; }
         ;
 
+field_length: field_length_str  { $$.set($1, NULL); }
+        ;
+
+
+field_scale: field_length_str   { $$.set(NULL, $1); }
+        ;
+
+
 opt_field_length:
-          /* empty */  { $$= (char*) 0; /* use default length */ }
-        | field_length { $$= $1; }
+          /* empty */  { $$.reset(); /* use default length */ }
+        | field_length
+        ;
+
+opt_field_scale:
+          /* empty */ { $$.reset(); }
+        | field_scale
         ;
 
 opt_precision:
-          /* empty */    { $$.set(0, 0); }
+          /* empty */    { $$.reset(); }
         | precision      { $$= $1; }
         ;
 
 
 attribute_list:
-          attribute_list attribute {}
+          attribute_list attribute
+          {
+             if (($$= $1).merge_collate_clause_and_collate_clause($2))
+               MYSQL_YYABORT;
+          }
         | attribute
         ;
 
 attribute:
-          NULL_SYM { Lex->last_field->flags&= ~ NOT_NULL_FLAG; }
-        | DEFAULT column_default_expr { Lex->last_field->default_value= $2; }
+          NULL_SYM { Lex->last_field->flags&= ~ NOT_NULL_FLAG; $$.init(); }
+        | DEFAULT column_default_expr { Lex->last_field->default_value= $2; $$.init(); }
         | ON UPDATE_SYM NOW_SYM opt_default_time_precision
           {
             Item *item= new (thd->mem_root) Item_func_now_local(thd, $4);
             if (unlikely(item == NULL))
               MYSQL_YYABORT;
             Lex->last_field->on_update= item;
+            $$.init();
           }
-        | AUTO_INC { Lex->last_field->flags|= AUTO_INCREMENT_FLAG | NOT_NULL_FLAG; }
+        | AUTO_INC { Lex->last_field->flags|= AUTO_INCREMENT_FLAG | NOT_NULL_FLAG; $$.init(); }
         | SERIAL_SYM DEFAULT VALUE_SYM
           {
             LEX *lex=Lex;
             lex->last_field->flags|= AUTO_INCREMENT_FLAG | NOT_NULL_FLAG | UNIQUE_KEY_FLAG;
             lex->alter_info.flags|= ALTER_ADD_INDEX;
+            $$.init();
           }
         | COLLATE_SYM collation_name
           {
-            if (unlikely(Lex->charset && !my_charset_same(Lex->charset,$2)))
-              my_yyabort_error((ER_COLLATION_CHARSET_MISMATCH, MYF(0),
-                                $2->coll_name.str, Lex->charset->cs_name.str));
-            Lex->last_field->charset= $2;
+            $$.set_collate_exact($2);
           }
-        | serial_attribute
+        | serial_attribute { $$.init(); }
         ;
 
 opt_compression_method:
@@ -6362,35 +6398,9 @@ asrow_attribute:
 
 serial_attribute:
           asrow_attribute
-        | IDENT_sys equal TEXT_STRING_sys
+        | engine_defined_option
           {
-            if (unlikely($3.length > ENGINE_OPTION_MAX_LENGTH))
-              my_yyabort_error((ER_VALUE_TOO_LONG, MYF(0), $1.str));
-            (void) new (thd->mem_root)
-                   engine_option_value($1, $3, true,
-                                       &Lex->last_field->option_list,
-                                       &Lex->option_list_last);
-          }
-        | IDENT_sys equal ident
-          {
-            if (unlikely($3.length > ENGINE_OPTION_MAX_LENGTH))
-              my_yyabort_error((ER_VALUE_TOO_LONG, MYF(0), $1.str));
-            (void) new (thd->mem_root)
-                   engine_option_value($1, $3, false,
-                                       &Lex->last_field->option_list,
-                                       &Lex->option_list_last);
-          }
-        | IDENT_sys equal real_ulonglong_num
-          {
-            (void) new (thd->mem_root)
-                   engine_option_value($1, $3, &Lex->last_field->option_list,
-                                       &Lex->option_list_last, thd->mem_root);
-          }
-        | IDENT_sys equal DEFAULT
-          {
-            (void) new (thd->mem_root)
-                   engine_option_value($1, &Lex->last_field->option_list,
-                                       &Lex->option_list_last);
+            $1->link(&Lex->last_field->option_list, &Lex->option_list_last);
           }
         | with_or_without_system VERSIONING_SYM
           {
@@ -6473,7 +6483,7 @@ collation_name:
           }
         ;
 
-opt_collate:
+opt_collate_or_default:
           /* empty */ { $$=NULL; }
         | COLLATE_SYM collation_name_or_default { $$=$2; }
         ;
@@ -6498,32 +6508,36 @@ charset_or_alias:
           }
         ;
 
-collate: COLLATE_SYM collation_name_or_default { $$= $2; }
-       ;
-
 opt_binary:
-          /* empty */             { bincmp_collation(NULL, false); }
-        | binary {}
+          /* empty */             { $$.init(); }
+        | binary
         ;
 
 binary:
-          BYTE_SYM                { bincmp_collation(&my_charset_bin, false); }
-        | charset_or_alias opt_bin_mod { bincmp_collation($1, $2); }
-        | BINARY                  { bincmp_collation(NULL, true); }
-        | BINARY charset_or_alias { bincmp_collation($2, true); }
-        | charset_or_alias collate
+          BYTE_SYM                     { $$.set_charset(&my_charset_bin); }
+        | charset_or_alias             { $$.set_charset($1); }
+        | charset_or_alias BINARY
           {
-            if (!$2)
-              Lex->charset= $1; // CHARACTER SET cs COLLATE DEFAULT
-            else
-            {
-              if (!my_charset_same($2, $1))
-                my_yyabort_error((ER_COLLATION_CHARSET_MISMATCH, MYF(0),
-                                  $2->coll_name.str, $1->cs_name.str));
-              Lex->charset= $2;
-            }
+            if ($$.set_charset_collate_binary($1))
+              MYSQL_YYABORT;
           }
-        | collate { Lex->charset= $1; }
+        | BINARY { $$.set_contextually_typed_binary_style(); }
+        | BINARY charset_or_alias
+          {
+            if ($$.set_charset_collate_binary($2))
+              MYSQL_YYABORT;
+          }
+        | charset_or_alias COLLATE_SYM DEFAULT
+          {
+            $$.set_charset_collate_default($1);
+          }
+        | charset_or_alias COLLATE_SYM collation_name
+          {
+            if ($$.set_charset_collate_exact($1, $3))
+              MYSQL_YYABORT;
+          }
+        | COLLATE_SYM collation_name  { $$.set_collate_exact($2); }
+        | COLLATE_SYM DEFAULT         { $$.set_collate_default(); }
         ;
 
 opt_bin_mod:
@@ -6796,33 +6810,9 @@ all_key_opt:
           {
             Lex->last_key->key_create_info.is_ignored= $1;
           }
-        | IDENT_sys equal TEXT_STRING_sys
+        | engine_defined_option
           {
-            if (unlikely($3.length > ENGINE_OPTION_MAX_LENGTH))
-              my_yyabort_error((ER_VALUE_TOO_LONG, MYF(0), $1.str));
-            (void) new (thd->mem_root)
-                   engine_option_value($1, $3, true, &Lex->option_list,
-                                       &Lex->option_list_last);
-          }
-        | IDENT_sys equal ident
-          {
-            if (unlikely($3.length > ENGINE_OPTION_MAX_LENGTH))
-              my_yyabort_error((ER_VALUE_TOO_LONG, MYF(0), $1.str));
-            (void) new (thd->mem_root)
-                   engine_option_value($1, $3, false, &Lex->option_list,
-                                       &Lex->option_list_last);
-          }
-        | IDENT_sys equal real_ulonglong_num
-          {
-            (void) new (thd->mem_root)
-                  engine_option_value($1, $3, &Lex->option_list,
-                                      &Lex->option_list_last, thd->mem_root);
-          }
-        | IDENT_sys equal DEFAULT
-          {
-            (void) new (thd->mem_root)
-                   engine_option_value($1, &Lex->option_list,
-                                       &Lex->option_list_last);
+            $1->link(&Lex->option_list, &Lex->option_list_last);
           }
         ;
 
@@ -6860,10 +6850,12 @@ ignorability:
 key_list:
           key_list ',' key_part order_dir
           {
+            $3->asc= $4;
             Lex->last_key->columns.push_back($3, thd->mem_root);
           }
         | key_part order_dir
           {
+            $1->asc= $2;
             Lex->last_key->columns.push_back($1, thd->mem_root);
           }
         ;
@@ -7615,7 +7607,8 @@ alter_list_item:
             lex->alter_info.alter_rename_key_list.push_back(ak);
             lex->alter_info.flags|= ALTER_RENAME_INDEX;
           }
-        | CONVERT_SYM TO_SYM charset charset_name_or_default opt_collate
+        | CONVERT_SYM TO_SYM charset charset_name_or_default
+                             opt_collate_or_default
           {
             if (!$4)
             {
@@ -9463,15 +9456,14 @@ opt_dyncol_type:
           /* empty */ 
           {
             $$.set(DYN_COL_NULL); /* automatic type */
-            Lex->charset= NULL;
 	  }
         | AS dyncol_type { $$= $2; }
         ;
 
 dyncol_type:
-          numeric_dyncol_type             { $$= $1; Lex->charset= NULL; }
-        | temporal_dyncol_type            { $$= $1; Lex->charset= NULL; }
-        | string_dyncol_type              { $$= $1; }
+          numeric_dyncol_type
+        | temporal_dyncol_type
+        | string_dyncol_type
         ;
 
 numeric_dyncol_type:
@@ -9485,28 +9477,25 @@ numeric_dyncol_type:
 
 temporal_dyncol_type:
           DATE_SYM                        { $$.set(DYN_COL_DATE); }
-        | TIME_SYM opt_field_length       { $$.set(DYN_COL_TIME, 0, $2); }
-        | DATETIME opt_field_length       { $$.set(DYN_COL_DATETIME, 0, $2); }
+        | TIME_SYM opt_field_scale        { $$.set(DYN_COL_TIME, $2); }
+        | DATETIME opt_field_scale        { $$.set(DYN_COL_DATETIME, $2); }
         ;
 
 string_dyncol_type:
-          char
-          { Lex->charset= thd->variables.collation_connection; }
-          opt_binary
+          char opt_binary
           {
-            $$.set(DYN_COL_STRING);
+            if ($$.set(DYN_COL_STRING, $2, thd->variables.collation_connection))
+              MYSQL_YYABORT;
           }
         | nchar
           {
-            $$.set(DYN_COL_STRING);
-            Lex->charset= national_charset_info;
+            $$.set(DYN_COL_STRING, national_charset_info);
           }
         ;
 
 dyncall_create_element:
    expr ',' expr opt_dyncol_type
    {
-     LEX *lex= Lex;
      $$= (DYNCALL_CREATE_DEF *)
        alloc_root(thd->mem_root, sizeof(DYNCALL_CREATE_DEF));
      if (unlikely($$ == NULL))
@@ -9514,13 +9503,13 @@ dyncall_create_element:
      $$->key= $1;
      $$->value= $3;
      $$->type= (DYNAMIC_COLUMN_TYPE)$4.dyncol_type();
-     $$->cs= lex->charset;
-     if ($4.length())
-       $$->len= strtoul($4.length(), NULL, 10);
+     $$->cs= $4.charset_collation();
+     if ($4.has_explicit_length())
+       $$->len= $4.length();
      else
        $$->len= 0;
-     if ($4.dec())
-       $$->frac= strtoul($4.dec(), NULL, 10);
+     if ($4.has_explicit_dec())
+       $$->frac= $4.dec();
      else
        $$->len= 0;
    }
@@ -9653,8 +9642,7 @@ column_default_non_parenthesized_expr:
           }
         | CAST_SYM '(' expr AS cast_type ')'
           {
-            if (unlikely(!($$= $5.create_typecast_item_or_error(thd, $3,
-                                                                Lex->charset))))
+            if (unlikely(!($$= $5.create_typecast_item_or_error(thd, $3))))
               MYSQL_YYABORT;
           }
         | CASE_SYM when_list_opt_else END
@@ -9670,8 +9658,7 @@ column_default_non_parenthesized_expr:
           }
         | CONVERT_SYM '(' expr ',' cast_type ')'
           {
-            if (unlikely(!($$= $5.create_typecast_item_or_error(thd, $3,
-                                                                Lex->charset))))
+            if (unlikely(!($$= $5.create_typecast_item_or_error(thd, $3))))
               MYSQL_YYABORT;
           }
         | CONVERT_SYM '(' expr USING charset_name ')'
@@ -10207,10 +10194,8 @@ function_call_nonkeyword:
         |
           COLUMN_GET_SYM '(' expr ',' expr AS cast_type ')'
           {
-            LEX *lex= Lex;
             $$= create_func_dyncol_get(thd, $3, $5, $7.type_handler(),
-                                        $7.length(), $7.dec(),
-                                        lex->charset);
+                                        $7, $7.charset());
             if (unlikely($$ == NULL))
               MYSQL_YYABORT;
           }
@@ -11116,26 +11101,31 @@ in_sum_expr:
 
 cast_type:
           BINARY opt_field_length
-          { $$.set(&type_handler_long_blob, $2); Lex->charset= &my_charset_bin; }
-        | CHAR_SYM opt_field_length
-          { Lex->charset= thd->variables.collation_connection; }
-          opt_binary
-          { $$.set(&type_handler_long_blob, $2); }
-        | VARCHAR field_length
-          { Lex->charset= thd->variables.collation_connection; }
-          opt_binary
-          { $$.set(&type_handler_long_blob, $2); }
-        | VARCHAR2_ORACLE_SYM field_length
-          { Lex->charset= thd->variables.collation_connection; }
-          opt_binary
-          { $$.set(&type_handler_long_blob, $2); }
+          { $$.set(&type_handler_long_blob, $2, &my_charset_bin); }
+        | CHAR_SYM opt_field_length opt_binary
+          {
+            if ($$.set(&type_handler_long_blob, $2, $3,
+                       thd->variables.collation_connection))
+              MYSQL_YYABORT;
+          }
+        | VARCHAR field_length opt_binary
+          {
+            if ($$.set(&type_handler_long_blob, $2, $3,
+                       thd->variables.collation_connection))
+              MYSQL_YYABORT;
+          }
+        | VARCHAR2_ORACLE_SYM field_length opt_binary
+          {
+            if ($$.set(&type_handler_long_blob, $2, $3,
+                       thd->variables.collation_connection))
+              MYSQL_YYABORT;
+          }
         | NCHAR_SYM opt_field_length
           {
-            Lex->charset= national_charset_info;
-            $$.set(&type_handler_long_blob, $2, 0);
+            $$.set(&type_handler_long_blob, $2, national_charset_info);
           }
-        | cast_type_numeric  { $$= $1; Lex->charset= NULL; }
-        | cast_type_temporal { $$= $1; Lex->charset= NULL; }
+        | cast_type_numeric  { $$= $1; }
+        | cast_type_temporal { $$= $1; }
         | IDENT_sys
           {
             if (Lex->set_cast_type_udt(&$$, $1))
@@ -11166,11 +11156,11 @@ cast_type_numeric:
 
 cast_type_temporal:
           DATE_SYM                       { $$.set(&type_handler_newdate); }
-        | TIME_SYM opt_field_length      { $$.set(&type_handler_time2, 0, $2); }
-        | DATETIME opt_field_length      { $$.set(&type_handler_datetime2, 0, $2); }
-        | INTERVAL_SYM DAY_SECOND_SYM field_length
+        | TIME_SYM opt_field_scale       { $$.set(&type_handler_time2, $2); }
+        | DATETIME opt_field_scale       { $$.set(&type_handler_datetime2, $2); }
+        | INTERVAL_SYM DAY_SECOND_SYM field_scale
           {
-            $$.set(&type_handler_interval_DDhhmmssff, 0, $3);
+            $$.set(&type_handler_interval_DDhhmmssff, $3);
           }
         ;
 
@@ -11324,7 +11314,7 @@ json_table_column:
                 !lex->json_table->m_cur_json_table_column))
               MYSQL_YYABORT;
 
-            lex->init_last_field(f, &$1, NULL);
+            lex->init_last_field(f, &$1);
           }
           json_table_column_type
           {
@@ -11354,8 +11344,8 @@ json_table_column_type:
           FOR_SYM ORDINALITY_SYM
           {
             Lex_field_type_st type;
-            type.set_handler_length_flags(&type_handler_slong, 0, 0);
-            Lex->last_field->set_attributes(thd, type, Lex->charset,
+            type.set(&type_handler_slong);
+            Lex->last_field->set_attributes(thd, type,
                                             COLUMN_DEFINITION_TABLE_FIELD);
             Lex->json_table->m_cur_json_table_column->
               set(Json_table_column::FOR_ORDINALITY);
@@ -11363,20 +11353,23 @@ json_table_column_type:
         | json_table_field_type PATH_SYM json_text_literal
             json_opt_on_empty_or_error
           {
-            Lex->last_field->set_attributes(thd, $1, Lex->charset,
+            Lex->last_field->set_attributes(thd, $1,
                                             COLUMN_DEFINITION_TABLE_FIELD);
             if (Lex->json_table->m_cur_json_table_column->
-                  set(thd, Json_table_column::PATH, $3, Lex->charset))
+                  set(thd, Json_table_column::PATH, $3,
+                      $1.lex_charset_collation()))
             {
               MYSQL_YYABORT;
             }
           }
         | json_table_field_type EXISTS PATH_SYM json_text_literal
           {
-            Lex->last_field->set_attributes(thd, $1, Lex->charset,
+            Lex->last_field->set_attributes(thd, $1,
                                             COLUMN_DEFINITION_TABLE_FIELD);
-            Lex->json_table->m_cur_json_table_column->
-              set(thd, Json_table_column::EXISTS_PATH, $4, Lex->charset);
+            if (Lex->json_table->m_cur_json_table_column->
+                  set(thd, Json_table_column::EXISTS_PATH, $4,
+                      $1.lex_charset_collation()))
+               MYSQL_YYABORT;
           }
         ;
 
@@ -11776,7 +11769,8 @@ opt_outer:
 index_hint_clause:
           /* empty */
           {
-            $$= thd->variables.old_mode ?  INDEX_HINT_MASK_JOIN : INDEX_HINT_MASK_ALL; 
+            $$= (thd->variables.old_behavior & OLD_MODE_IGNORE_INDEX_ONLY_FOR_JOIN) ?
+                INDEX_HINT_MASK_JOIN : INDEX_HINT_MASK_ALL;
           }
         | FOR_SYM JOIN_SYM      { $$= INDEX_HINT_MASK_JOIN;  }
         | FOR_SYM ORDER_SYM BY  { $$= INDEX_HINT_MASK_ORDER; }
@@ -13953,12 +13947,25 @@ show_param:
             Lex->spname= $3;
             Lex->sql_command = SQLCOM_SHOW_CREATE_EVENT;
           }
-        | describe_command FOR_SYM expr
+        | describe_command opt_format_json FOR_SYM expr
+          /*
+            The alternaltive syntax for this command is MySQL-compatible
+            EXPLAIN FOR CONNECTION
+          */
           {
             Lex->sql_command= SQLCOM_SHOW_EXPLAIN;
-            if (unlikely(prepare_schema_table(thd, Lex, 0, SCH_EXPLAIN)))
+            if (unlikely(prepare_schema_table(thd, Lex, 0,
+                Lex->explain_json ? SCH_EXPLAIN_JSON : SCH_EXPLAIN_TABULAR)))
               MYSQL_YYABORT;
-            add_value_to_list(thd, $3);
+            add_value_to_list(thd, $4);
+          }
+        | ANALYZE_SYM opt_format_json FOR_SYM expr
+          {
+            Lex->sql_command= SQLCOM_SHOW_ANALYZE;
+            if (unlikely(prepare_schema_table(thd, Lex, 0,
+                Lex->explain_json ? SCH_ANALYZE_JSON : SCH_ANALYZE_TABULAR)))
+              MYSQL_YYABORT;
+            add_value_to_list(thd, $4);
           }
         | IDENT_sys remember_tok_start wild_and_where
            {
@@ -14112,8 +14119,8 @@ opt_format_json:
             else if (lex_string_eq(&$3, STRING_WITH_LEN("TRADITIONAL")))
               DBUG_ASSERT(Lex->explain_json==false);
             else
-              my_yyabort_error((ER_UNKNOWN_EXPLAIN_FORMAT, MYF(0), "EXPLAIN",
-                               $3.str));
+              my_yyabort_error((ER_UNKNOWN_EXPLAIN_FORMAT, MYF(0),
+                                "EXPLAIN/ANALYZE", $3.str));
           }
         ;
 
@@ -14130,6 +14137,31 @@ opt_describe_column:
           }
         ;
 
+explain_for_connection:
+          /*
+            EXPLAIN FOR CONNECTION is an alternative syntax for
+            SHOW EXPLAIN FOR command. It was introduced for compatibility
+            with MySQL which implements EXPLAIN FOR CONNECTION command
+          */
+          describe_command opt_format_json FOR_SYM CONNECTION_SYM expr
+          {
+            LEX *lex=Lex;
+            lex->wild=0;
+            lex->ident= null_clex_str;
+            if (Lex->main_select_push())
+              MYSQL_YYABORT;
+            mysql_init_select(lex);
+            lex->current_select->parsing_place= SELECT_LIST;
+            lex->create_info.init();
+            Select->parsing_place= NO_MATTER;
+            Lex->pop_select(); //main select
+            Lex->sql_command= SQLCOM_SHOW_EXPLAIN;
+            if (unlikely(prepare_schema_table(thd, Lex, 0,
+                Lex->explain_json ? SCH_EXPLAIN_JSON : SCH_EXPLAIN_TABULAR)))
+              MYSQL_YYABORT;
+            add_value_to_list(thd, $5);
+          }
+        ;
 
 /* flush things */
 
@@ -16547,7 +16579,7 @@ option_value_no_option_type:
               thd->parse_error();
             MYSQL_YYABORT;
           }
-        | NAMES_SYM charset_name_or_default opt_collate
+        | NAMES_SYM charset_name_or_default opt_collate_or_default
           {
             if (sp_create_assignment_lex(thd, $1.pos()))
               MYSQL_YYABORT;
@@ -17779,8 +17811,7 @@ sf_return_type:
           {
             LEX *lex= Lex;
             lex->init_last_field(&lex->sphead->m_return_field_def,
-                                 &empty_clex_str,
-                                 thd->variables.collation_database);
+                                 &empty_clex_str);
           }
           field_type
           {
@@ -18050,11 +18081,6 @@ sp_opt_default:
         | DEFAULT expr { $$ = $2; }
         ;
 
-sp_pdparam:
-          sp_parameter_type sp_param_name_and_type { $2->mode=$1; }
-        | sp_param_name_and_type { $1->mode= sp_variable::MODE_IN; }
-        ;
-
 sp_decl_variable_list_anchored:
           sp_decl_idents_init_vars
           TYPE_SYM OF_SYM optionally_qualified_column_ident
@@ -18074,26 +18100,49 @@ sp_decl_variable_list_anchored:
           }
         ;
 
-sp_param_name_and_type_anchored:
-          sp_param_name TYPE_SYM OF_SYM ident '.' ident
+sp_param_name_and_mode:
+          sp_parameter_type sp_param_name
+          {
+            $2->mode= $1;
+            $$= $2;
+          }
+        | sp_param_name
+        ;
+
+sp_param:
+          sp_param_name_and_mode field_type
+          {
+            if (unlikely(Lex->sp_param_fill_definition($$= $1, $2)))
+              MYSQL_YYABORT;
+          }
+        | sp_param_name_and_mode ROW_SYM row_type_body
+          {
+            if (unlikely(Lex->sphead->spvar_fill_row(thd, $$= $1, $3)))
+              MYSQL_YYABORT;
+          }
+        | sp_param_anchored
+        ;
+
+sp_param_anchored:
+          sp_param_name_and_mode TYPE_SYM OF_SYM ident '.' ident
           {
             if (unlikely(Lex->sphead->spvar_fill_type_reference(thd,
                                                                 $$= $1, $4,
                                                                 $6)))
               MYSQL_YYABORT;
           }
-        | sp_param_name TYPE_SYM OF_SYM ident '.' ident '.' ident
+        | sp_param_name_and_mode TYPE_SYM OF_SYM ident '.' ident '.' ident
           {
             if (unlikely(Lex->sphead->spvar_fill_type_reference(thd, $$= $1,
                                                                 $4, $6, $8)))
               MYSQL_YYABORT;
           }
-        | sp_param_name ROW_SYM TYPE_SYM OF_SYM ident
+        | sp_param_name_and_mode ROW_SYM TYPE_SYM OF_SYM ident
           {
             if (unlikely(Lex->sphead->spvar_fill_table_rowtype_reference(thd, $$= $1, $5)))
               MYSQL_YYABORT;
           }
-        | sp_param_name ROW_SYM TYPE_SYM OF_SYM ident '.' ident
+        | sp_param_name_and_mode ROW_SYM TYPE_SYM OF_SYM ident '.' ident
           {
             if (unlikely(Lex->sphead->spvar_fill_table_rowtype_reference(thd, $$= $1, $5, $7)))
               MYSQL_YYABORT;
@@ -18495,46 +18544,6 @@ sp_opt_inout:
         | sp_parameter_type
         | IN_SYM OUT_SYM { $$= sp_variable::MODE_INOUT; }
         ;
-
-sp_pdparam:
-          sp_param_name sp_opt_inout field_type
-          {
-            $1->mode= $2;
-            if (unlikely(Lex->sp_param_fill_definition($1, $3)))
-              MYSQL_YYABORT;
-          }
-        | sp_param_name sp_opt_inout sp_decl_ident '.' ident PERCENT_ORACLE_SYM TYPE_SYM
-          {
-            $1->mode= $2;
-            if (unlikely(Lex->sphead->spvar_fill_type_reference(thd, $1, $3, $5)))
-              MYSQL_YYABORT;
-          }
-        | sp_param_name sp_opt_inout sp_decl_ident '.' ident '.' ident PERCENT_ORACLE_SYM TYPE_SYM
-          {
-            $1->mode= $2;
-            if (unlikely(Lex->sphead->spvar_fill_type_reference(thd, $1, $3, $5, $7)))
-              MYSQL_YYABORT;
-          }
-        | sp_param_name sp_opt_inout sp_decl_ident PERCENT_ORACLE_SYM ROWTYPE_ORACLE_SYM
-          {
-            $1->mode= $2;
-            if (unlikely(Lex->sphead->spvar_fill_table_rowtype_reference(thd, $1, $3)))
-              MYSQL_YYABORT;
-          }
-        | sp_param_name sp_opt_inout sp_decl_ident '.' ident PERCENT_ORACLE_SYM ROWTYPE_ORACLE_SYM
-          {
-            $1->mode= $2;
-            if (unlikely(Lex->sphead->spvar_fill_table_rowtype_reference(thd, $1, $3, $5)))
-              MYSQL_YYABORT;
-          }
-        | sp_param_name sp_opt_inout ROW_SYM row_type_body
-          {
-            $1->mode= $2;
-            if (unlikely(Lex->sphead->spvar_fill_row(thd, $1, $4)))
-              MYSQL_YYABORT;
-          }
-        ;
-
 
 sp_proc_stmts1_implicit_block:
           {
@@ -18967,23 +18976,45 @@ sp_decl_variable_list_anchored:
           }
         ;
 
-sp_param_name_and_type_anchored:
-          sp_param_name sp_decl_ident '.' ident PERCENT_ORACLE_SYM TYPE_SYM
+sp_param_name_and_mode:
+          sp_param_name sp_opt_inout
+          {
+             $1->mode= $2;
+             $$= $1;
+          }
+        ;
+
+sp_param:
+          sp_param_name_and_mode field_type
+          {
+            if (unlikely(Lex->sp_param_fill_definition($$= $1, $2)))
+              MYSQL_YYABORT;
+          }
+        | sp_param_name_and_mode ROW_SYM row_type_body
+          {
+            if (unlikely(Lex->sphead->spvar_fill_row(thd, $$= $1, $3)))
+              MYSQL_YYABORT;
+          }
+        | sp_param_anchored
+        ;
+
+sp_param_anchored:
+          sp_param_name_and_mode sp_decl_ident '.' ident PERCENT_ORACLE_SYM TYPE_SYM
           {
             if (unlikely(Lex->sphead->spvar_fill_type_reference(thd, $$= $1, $2, $4)))
               MYSQL_YYABORT;
           }
-        | sp_param_name sp_decl_ident '.' ident '.' ident PERCENT_ORACLE_SYM TYPE_SYM
+        | sp_param_name_and_mode sp_decl_ident '.' ident '.' ident PERCENT_ORACLE_SYM TYPE_SYM
           {
             if (unlikely(Lex->sphead->spvar_fill_type_reference(thd, $$= $1, $2, $4, $6)))
               MYSQL_YYABORT;
           }
-        | sp_param_name sp_decl_ident PERCENT_ORACLE_SYM ROWTYPE_ORACLE_SYM
+        | sp_param_name_and_mode sp_decl_ident PERCENT_ORACLE_SYM ROWTYPE_ORACLE_SYM
           {
             if (unlikely(Lex->sphead->spvar_fill_table_rowtype_reference(thd, $$= $1, $2)))
               MYSQL_YYABORT;
           }
-        | sp_param_name sp_decl_ident '.' ident PERCENT_ORACLE_SYM ROWTYPE_ORACLE_SYM
+        | sp_param_name_and_mode sp_decl_ident '.' ident PERCENT_ORACLE_SYM ROWTYPE_ORACLE_SYM
           {
             if (unlikely(Lex->sphead->spvar_fill_table_rowtype_reference(thd, $$= $1, $2, $4)))
               MYSQL_YYABORT;

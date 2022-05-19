@@ -2409,6 +2409,12 @@ static Sys_var_bit Sys_skip_parallel_replication(
        SESSION_ONLY(option_bits), NO_CMD_LINE, OPTION_RPL_SKIP_PARALLEL,
        DEFAULT(FALSE));
 
+static Sys_var_mybool Sys_binlog_alter_two_phase(
+       "binlog_alter_two_phase",
+       "When set, split ALTER at binary logging into 2 statements: "
+       "START ALTER and COMMIT/ROLLBACK ALTER",
+       SESSION_VAR(binlog_alter_two_phase), CMD_LINE(OPT_ARG),
+       DEFAULT(FALSE));
 
 static bool
 check_gtid_ignore_duplicates(sys_var *self, THD *thd, set_var *var)
@@ -2648,9 +2654,28 @@ static Sys_var_ulong Sys_net_retry_count(
        BLOCK_SIZE(1), NO_MUTEX_GUARD, NOT_IN_BINLOG, ON_CHECK(0),
        ON_UPDATE(fix_net_retry_count));
 
+static bool set_old_mode (sys_var *self, THD *thd, enum_var_type type)
+{
+  if (thd->variables.old_mode)
+  {
+    thd->variables.old_behavior|= (OLD_MODE_NO_PROGRESS_INFO |
+                                   OLD_MODE_IGNORE_INDEX_ONLY_FOR_JOIN |
+                                   OLD_MODE_COMPAT_5_1_CHECKSUM);
+  }
+  else
+  {
+    thd->variables.old_behavior&= ~(OLD_MODE_NO_PROGRESS_INFO|
+                                    OLD_MODE_IGNORE_INDEX_ONLY_FOR_JOIN |
+                                    OLD_MODE_COMPAT_5_1_CHECKSUM);
+  }
+
+  return false;
+}
+
 static Sys_var_mybool Sys_old_mode(
        "old", "Use compatible behavior from previous MariaDB version. See also --old-mode",
-       SESSION_VAR(old_mode), CMD_LINE(OPT_ARG), DEFAULT(FALSE));
+       SESSION_VAR(old_mode), CMD_LINE(OPT_ARG), DEFAULT(FALSE), 0, NOT_IN_BINLOG, ON_CHECK(0),
+       ON_UPDATE(set_old_mode), DEPRECATED("'@@old_mode'"));
 
 static const char *alter_algorithm_modes[]= {"DEFAULT", "COPY", "INPLACE",
 "NOCOPY", "INSTANT", NULL};
@@ -3766,6 +3791,8 @@ static const char *old_mode_names[]=
   "NO_PROGRESS_INFO",
   "ZERO_DATE_TIME_CAST",
   "UTF8_IS_UTF8MB3",
+  "IGNORE_INDEX_ONLY_FOR_JOIN",
+  "COMPAT_5_1_CHECKSUM",
   0
 };
 
@@ -4414,7 +4441,7 @@ static bool fix_autocommit(sys_var *self, THD *thd, enum_var_type type)
       transaction implicitly at the end (@sa stmt_causes_implicitcommit()).
     */
     thd->variables.option_bits&=
-                 ~(OPTION_BEGIN | OPTION_KEEP_LOG | OPTION_NOT_AUTOCOMMIT |
+                 ~(OPTION_BEGIN | OPTION_BINLOG_THIS_TRX | OPTION_NOT_AUTOCOMMIT |
                    OPTION_GTID_BEGIN);
     thd->transaction->all.modified_non_trans_table= false;
     thd->transaction->all.m_unsafe_rollback_flags&= ~THD_TRANS::DID_WAIT;
@@ -4917,7 +4944,9 @@ static Sys_var_mybool Sys_keep_files_on_create(
        "keep_files_on_create",
        "Don't overwrite stale .MYD and .MYI even if no directory is specified",
        SESSION_VAR(keep_files_on_create), CMD_LINE(OPT_ARG),
-       DEFAULT(FALSE));
+       DEFAULT(FALSE),
+       NO_MUTEX_GUARD, NOT_IN_BINLOG, ON_CHECK(0), ON_UPDATE(0),
+       DEPRECATED("")); // since 10.8.0
 
 static char *license;
 static Sys_var_charptr Sys_license(
@@ -5982,6 +6011,11 @@ static Sys_var_charptr Sys_wsrep_notify_cmd(
        READ_ONLY GLOBAL_VAR(wsrep_notify_cmd), CMD_LINE(REQUIRED_ARG),
        DEFAULT(""));
 
+static Sys_var_charptr_fscs Sys_wsrep_status_file(
+       "wsrep_status_file", "wsrep status output filename",
+       READ_ONLY GLOBAL_VAR(wsrep_status_file), CMD_LINE(REQUIRED_ARG),
+       DEFAULT(""));
+
 static Sys_var_mybool Sys_wsrep_certify_nonPK(
        "wsrep_certify_nonPK", "Certify tables with no primary key",
        GLOBAL_VAR(wsrep_certify_nonPK), 
@@ -6517,7 +6551,8 @@ static Sys_var_enum Sys_histogram_type(
        "Specifies type of the histograms created by ANALYZE. "
        "Possible values are: "
        "SINGLE_PREC_HB - single precision height-balanced, "
-       "DOUBLE_PREC_HB - double precision height-balanced.",
+       "DOUBLE_PREC_HB - double precision height-balanced, "
+       "JSON_HB - height-balanced, stored as JSON.",
        SESSION_VAR(histogram_type), CMD_LINE(REQUIRED_ARG),
        histogram_types, DEFAULT(1));
 

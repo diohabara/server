@@ -2480,4 +2480,5 @@ void propagate_new_equalities(THD *thd, Item *cond,
                               COND_EQUAL *inherited,
                               bool *is_simplifiable_cond);
 
+bool dbug_user_var_equals_str(THD *thd, const char *name, const char *value);
 #endif /* SQL_SELECT_INCLUDED */

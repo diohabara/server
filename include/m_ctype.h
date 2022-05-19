@@ -135,8 +135,8 @@ typedef struct my_contraction_list_t
 
 my_bool my_uca_can_be_contraction_head(const MY_CONTRACTIONS *c, my_wc_t wc);
 my_bool my_uca_can_be_contraction_tail(const MY_CONTRACTIONS *c, my_wc_t wc);
-uint16 *my_uca_contraction2_weight(const MY_CONTRACTIONS *c,
-                                   my_wc_t wc1, my_wc_t wc2);
+const uint16 *my_uca_contraction2_weight(const MY_CONTRACTIONS *c,
+                                         my_wc_t wc1, my_wc_t wc2);
 
 
 /* Collation weights on a single level (e.g. primary, secondary, tertiarty) */
@@ -1268,6 +1268,15 @@ extern struct charset_info_st my_charset_utf8mb4_nopad_bin;
 extern struct charset_info_st my_charset_utf8mb4_general_nopad_ci;
 extern struct charset_info_st my_charset_utf8mb4_unicode_ci;
 extern struct charset_info_st my_charset_utf8mb4_unicode_nopad_ci;
+
+/*
+  Contextually typed collations, e.g.:
+    CHAR(10) COLLATE DEFAULT
+    CHAR(10) BINARY
+*/
+extern struct charset_info_st my_collation_contextually_typed_default;
+extern struct charset_info_st my_collation_contextually_typed_binary;
+
 
 #define MY_UTF8MB3                 "utf8mb3"
 #define MY_UTF8MB4                 "utf8mb4"

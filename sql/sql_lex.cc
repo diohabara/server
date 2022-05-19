@@ -543,36 +543,10 @@ bool LEX::add_alter_list(LEX_CSTRING name, LEX_CSTRING new_name, bool exists)
 
 
 void LEX::init_last_field(Column_definition *field,
-                          const LEX_CSTRING *field_name,
-                          const CHARSET_INFO *cs)
+                          const LEX_CSTRING *field_name)
 {
   last_field= field;
-
   field->field_name= *field_name;
-
-  /* reset LEX fields that are used in Create_field::set_and_check() */
-  charset= cs;
-}
-
-
-bool LEX::set_bincmp(CHARSET_INFO *cs, bool bin)
-{
-  /*
-     if charset is NULL - we're parsing a field declaration.
-     we cannot call find_bin_collation for a field here, because actual
-     field charset is determined in get_sql_field_charset() much later.
-     so we only set a flag.
-  */
-  if (!charset)
-  {
-    charset= cs;
-    last_field->flags|= bin ? BINCMP_FLAG : 0;
-    return false;
-  }
-
-  charset= bin ? find_bin_collation(cs ? cs : charset)
-               :                    cs ? cs : charset;
-  return charset == NULL;
 }
 
 
@@ -5848,17 +5822,33 @@ bool st_select_lex::is_merged_child_of(st_select_lex *ancestor)
 }
 
 /* 
-  This is used by SHOW EXPLAIN. It assuses query plan has been already 
+  This is used by SHOW EXPLAIN|ANALYZE. It assumes query plan has been already
   collected into QPF structures and we only need to print it out.
 */
 
 int LEX::print_explain(select_result_sink *output, uint8 explain_flags,
-                       bool is_analyze, bool *printed_anything)
+                       bool is_analyze, bool is_json_format,
+                       bool *printed_anything)
 {
   int res;
   if (explain && explain->have_query_plan())
   {
-    res= explain->print_explain(output, explain_flags, is_analyze);
+    if (is_json_format)
+    {
+      auto now= microsecond_interval_timer();
+      auto start_time= thd->start_utime;
+      auto query_time_in_progress_ms= 0ULL;
+      if (likely(now > start_time))
+        query_time_in_progress_ms=
+          (now - start_time) / (HRTIME_RESOLUTION / 1000);
+      res= explain->print_explain_json(output, is_analyze,
+                                       true /* is_show_cmd */,
+                                       query_time_in_progress_ms);
+    }
+    else
+    {
+      res= explain->print_explain(output, explain_flags, is_analyze);
+    }
     *printed_anything= true;
   }
   else
@@ -6399,8 +6389,7 @@ sp_variable *LEX::sp_param_init(LEX_CSTRING *name)
     return NULL;
   }
   sp_variable *spvar= spcont->add_variable(thd, name);
-  init_last_field(&spvar->field_def, name,
-                  thd->variables.collation_database);
+  init_last_field(&spvar->field_def, name);
   return spvar;
 }
 
@@ -6409,8 +6398,7 @@ bool LEX::sp_param_fill_definition(sp_variable *spvar,
                                    const Lex_field_type_st &def)
 {
   return
-    last_field->set_attributes(thd, def, charset,
-                               COLUMN_DEFINITION_ROUTINE_PARAM) ||
+    last_field->set_attributes(thd, def, COLUMN_DEFINITION_ROUTINE_PARAM) ||
     sphead->fill_spvar_definition(thd, last_field, &spvar->name);
 }
 
@@ -6418,8 +6406,7 @@ bool LEX::sp_param_fill_definition(sp_variable *spvar,
 bool LEX::sf_return_fill_definition(const Lex_field_type_st &def)
 {
   return
-    last_field->set_attributes(thd, def, charset,
-                               COLUMN_DEFINITION_FUNCTION_RETURN) ||
+    last_field->set_attributes(thd, def, COLUMN_DEFINITION_FUNCTION_RETURN) ||
     sphead->fill_field_definition(thd, last_field);
 }
 
@@ -6499,8 +6486,7 @@ void LEX::sp_variable_declarations_init(THD *thd, int nvars)
 
   sphead->reset_lex(thd);
   spcont->declare_var_boundary(nvars);
-  thd->lex->init_last_field(&spvar->field_def, &spvar->name,
-                            thd->variables.collation_database);
+  thd->lex->init_last_field(&spvar->field_def, &spvar->name);
 }
 
 
@@ -7158,6 +7144,27 @@ bool LEX::sp_declare_cursor(THD *thd, const LEX_CSTRING *name,
 {
   uint offp;
   sp_instr_cpush *i;
+
+  /* In some cases param_ctx can be NULL. e.g.: FOR rec IN (SELECT...) */
+  if (param_ctx)
+  {
+    for (uint prm= 0; prm < param_ctx->context_var_count(); prm++)
+    {
+      const sp_variable *param= param_ctx->get_context_variable(prm);
+      if (param->mode != sp_variable::MODE_IN)
+      {
+        /*
+          PL/SQL supports the IN keyword in cursor parameters.
+          We also support this for compatibility. Note, OUT/INOUT parameters
+          will unlikely be ever supported. So "YET" may sound confusing here.
+          But it should be better than using a generic error. Adding a dedicated
+          error message for this small issue is not desirable.
+        */
+        my_error(ER_NOT_SUPPORTED_YET, MYF(0), "OUT/INOUT cursor parameter");
+        return true;
+      }
+    }
+  }
 
   if (spcont->find_cursor(name, &offp, true))
   {
@@ -9782,7 +9789,11 @@ bool LEX::part_values_history(THD *thd)
   }
   else
   {
-    part_info->vers_init_info(thd);
+    if (unlikely(part_info->vers_init_info(thd)))
+    {
+      my_error(ER_OUT_OF_RESOURCES, MYF(0));
+      return true;
+    }
     elem->id= UINT_MAX32;
   }
   DBUG_ASSERT(part_info->vers_info);
@@ -11538,16 +11549,15 @@ Spvar_definition *LEX::row_field_name(THD *thd, const Lex_ident_sys_st &name)
   }
   if (unlikely(!(res= new (thd->mem_root) Spvar_definition())))
     return NULL;
-  init_last_field(res, &name, thd->variables.collation_database);
+  init_last_field(res, &name);
   return res;
 }
 
 
 Item *
-Lex_cast_type_st::create_typecast_item_or_error(THD *thd, Item *item,
-                                                CHARSET_INFO *cs) const
+Lex_cast_type_st::create_typecast_item_or_error(THD *thd, Item *item) const
 {
-  Item *tmp= create_typecast_item(thd, item, cs);
+  Item *tmp= create_typecast_item(thd, item);
   if (!tmp)
   {
     Name name= m_type_handler->name();
@@ -11561,14 +11571,42 @@ Lex_cast_type_st::create_typecast_item_or_error(THD *thd, Item *item,
 }
 
 
-void Lex_field_type_st::set_handler_length_flags(const Type_handler *handler,
-                                                 const char *length,
-                                                 uint32 flags)
+void
+Lex_length_and_dec_st::set(const char *plength, const char *pdec)
+{
+  reset();
+
+  if ((m_has_explicit_length= (plength != nullptr)))
+  {
+    int err;
+    ulonglong tmp= my_strtoll10(plength, NULL, &err);
+    if ((m_length_overflowed= (tmp > UINT_MAX32 || err)))
+      m_length= UINT_MAX32;
+    else
+      m_length= (uint32) tmp;
+  }
+
+  if ((m_has_explicit_dec= (pdec != nullptr)))
+  {
+    int err;
+    ulonglong tmp= my_strtoll10(pdec, NULL, &err);
+    if ((m_dec_overflowed= (tmp > 255 || err)))
+      m_dec= 255;
+    else
+      m_dec= (uint8) tmp;
+  }
+}
+
+
+void
+Lex_field_type_st::set_handler_length_flags(const Type_handler *handler,
+                                            const Lex_length_and_dec_st &attr,
+                                            uint32 flags)
 {
   DBUG_ASSERT(!handler->is_unsigned());
+  set(handler, attr);
   if (flags & UNSIGNED_FLAG)
-    handler= handler->type_handler_unsigned();
-  set(handler, length, NULL);
+    m_handler= m_handler->type_handler_unsigned();
 }
 
 
@@ -11579,8 +11617,7 @@ bool LEX::set_field_type_udt(Lex_field_type_st *type,
   const Type_handler *h;
   if (!(h= Type_handler::handler_by_name_or_error(thd, name)))
     return true;
-  type->set(h, attr);
-  charset= &my_charset_bin;
+  type->set(h, attr, &my_charset_bin);
   return false;
 }
 
@@ -11592,7 +11629,6 @@ bool LEX::set_cast_type_udt(Lex_cast_type_st *type,
   if (!(h= Type_handler::handler_by_name_or_error(thd, name)))
     return true;
   type->set(h);
-  charset= NULL;
   return false;
 }
 

@@ -84,6 +84,7 @@
 #include "events.h"
 #include "sql_trigger.h"
 #include "transaction.h"
+#include "sql_alter.h"
 #include "sql_audit.h"
 #include "sql_prepare.h"
 #include "sql_cte.h"
@@ -665,6 +666,7 @@ void init_update_queries(void)
   sql_command_flags[SQLCOM_SHOW_ENGINE_MUTEX]= CF_STATUS_COMMAND;
   sql_command_flags[SQLCOM_SHOW_ENGINE_LOGS]= CF_STATUS_COMMAND;
   sql_command_flags[SQLCOM_SHOW_EXPLAIN]= CF_STATUS_COMMAND;
+  sql_command_flags[SQLCOM_SHOW_ANALYZE]= CF_STATUS_COMMAND;
   sql_command_flags[SQLCOM_SHOW_PROCESSLIST]= CF_STATUS_COMMAND;
   sql_command_flags[SQLCOM_SHOW_GRANTS]=      CF_STATUS_COMMAND;
   sql_command_flags[SQLCOM_SHOW_CREATE_USER]= CF_STATUS_COMMAND;
@@ -3879,6 +3881,7 @@ mysql_execute_command(THD *thd, bool is_called_from_prepared_stmt)
     break;
   }
   case SQLCOM_SHOW_EXPLAIN:
+  case SQLCOM_SHOW_ANALYZE:
   {
     if (!thd->security_ctx->priv_user[0] &&
         check_global_access(thd, PRIV_STMT_SHOW_EXPLAIN))
@@ -4929,7 +4932,7 @@ mysql_execute_command(THD *thd, bool is_called_from_prepared_stmt)
       status_var_increment(thd->status_var.com_drop_tmp_table);
 
       /* So that DROP TEMPORARY TABLE gets to binlog at commit/rollback */
-      thd->variables.option_bits|= OPTION_KEEP_LOG;
+      thd->variables.option_bits|= OPTION_BINLOG_THIS_TRX;
     }
     /*
       If we are a slave, we should add IF EXISTS if the query executed
@@ -6067,8 +6070,7 @@ finish:
   }
 
   /* Free tables. Set stage 'closing tables' */
-  close_thread_tables(thd);
-
+  close_thread_tables_for_query(thd);
 
 #ifndef DBUG_OFF
   if (lex->sql_command != SQLCOM_SET_OPTION && ! thd->in_sub_stmt)
@@ -6216,7 +6218,8 @@ static bool execute_sqlcom_select(THD *thd, TABLE_LIST *all_tables)
         result->remove_offset_limit();
         if (lex->explain_json)
         {
-          lex->explain->print_explain_json(result, lex->analyze_stmt);
+          lex->explain->print_explain_json(result, lex->analyze_stmt,
+                                           false /* is_show_cmd */);
         }
         else
         {
@@ -7581,9 +7584,10 @@ void THD::reset_for_next_command(bool do_clear_error)
       global_system_variables.auto_increment_increment;
   }
 #endif /* WITH_WSREP */
+
   query_start_sec_part_used= 0;
   is_fatal_error= time_zone_used= 0;
-  log_current_statement= 0;
+  variables.option_bits&= ~OPTION_BINLOG_THIS_STMT;
 
   /*
     Clear the status flag that are expected to be cleared at the
@@ -7592,12 +7596,12 @@ void THD::reset_for_next_command(bool do_clear_error)
   server_status&= ~SERVER_STATUS_CLEAR_SET;
   /*
     If in autocommit mode and not in a transaction, reset
-    OPTION_STATUS_NO_TRANS_UPDATE | OPTION_KEEP_LOG to not get warnings
+    OPTION_STATUS_NO_TRANS_UPDATE | OPTION_BINLOG_THIS_TRX to not get warnings
     in ha_rollback_trans() about some tables couldn't be rolled back.
   */
   if (!in_multi_stmt_transaction_mode())
   {
-    variables.option_bits&= ~OPTION_KEEP_LOG;
+    variables.option_bits&= ~OPTION_BINLOG_THIS_TRX;
     transaction->all.reset();
   }
   DBUG_ASSERT(security_ctx== &main_security_ctx);
@@ -10514,24 +10518,6 @@ merge_charset_and_collation(CHARSET_INFO *cs, CHARSET_INFO *cl)
       return NULL;
     }
     return cl;
-  }
-  return cs;
-}
-
-/** find a collation with binary comparison rules
-*/
-CHARSET_INFO *find_bin_collation(CHARSET_INFO *cs)
-{
-  const char *csname= cs->cs_name.str;
-  THD *thd= current_thd;
-  myf utf8_flag= thd->get_utf8_flag();
-
-  cs= get_charset_by_csname(csname, MY_CS_BINSORT, MYF(utf8_flag));
-  if (!cs)
-  {
-    char tmp[65];
-    strxnmov(tmp, sizeof(tmp)-1, csname, "_bin", NULL);
-    my_error(ER_UNKNOWN_COLLATION, MYF(0), tmp);
   }
   return cs;
 }

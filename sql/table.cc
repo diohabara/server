@@ -4320,6 +4320,8 @@ enum open_frm_error open_table_from_share(THD *thd, TABLE_SHARE *share,
       thd->restore_active_arena(&part_func_arena, &backup_arena);
       goto partititon_err;
     }
+    if (parse_engine_part_options(thd, outparam))
+      goto err;
     outparam->part_info->is_auto_partitioned= share->auto_partitioned;
     DBUG_PRINT("info", ("autopartitioned: %u", share->auto_partitioned));
     /* 
@@ -10246,5 +10248,5 @@ void TABLE::mark_table_for_reopen()
 {
   THD *thd= in_use;
   DBUG_ASSERT(thd);
-  thd->locked_tables_list.mark_table_for_reopen(thd, this);
+  thd->locked_tables_list.mark_table_for_reopen(this);
 }

@@ -1543,6 +1543,7 @@ dict_load_field_low(
 	ulint		len;
 	unsigned	pos_and_prefix_len;
 	unsigned	prefix_len;
+	bool		descending;
 	bool		first_field;
 	ulint		position;
 
@@ -1595,10 +1596,12 @@ err_len:
 	}
 
 	if (first_field || pos_and_prefix_len > 0xFFFFUL) {
-		prefix_len = pos_and_prefix_len & 0xFFFFUL;
+		prefix_len = pos_and_prefix_len & 0x7FFFUL;
+		descending = (pos_and_prefix_len & 0x8000UL);
 		position = (pos_and_prefix_len & 0xFFFF0000UL)  >> 16;
 	} else {
 		prefix_len = 0;
+		descending = false;
 		position = pos_and_prefix_len & 0xFFFFUL;
 	}
 
@@ -1647,11 +1650,12 @@ err_len:
 	if (index) {
 		dict_mem_index_add_field(
 			index, mem_heap_strdupl(heap, (const char*) field, len),
-			prefix_len);
+			prefix_len, descending);
 	} else {
 		sys_field->name = mem_heap_strdupl(
 			heap, (const char*) field, len);
 		sys_field->prefix_len = prefix_len & ((1U << 12) - 1);
+		sys_field->descending = descending;
 		*pos = position;
 	}
 
@@ -3066,13 +3070,12 @@ loop:
 	following call does the comparison in the latin1_swedish_ci
 	charset-collation, in a case-insensitive way. */
 
-	if (0 != cmp_data_data(dfield_get_type(dfield)->mtype,
-			       dfield_get_type(dfield)->prtype,
-			       static_cast<const byte*>(
-				       dfield_get_data(dfield)),
-			       dfield_get_len(dfield),
-			       field, len)) {
-
+	if (cmp_data(dfield_get_type(dfield)->mtype,
+		     dfield_get_type(dfield)->prtype,
+		     false,
+		     static_cast<const byte*>(dfield_get_data(dfield)),
+		     dfield_get_len(dfield),
+		     field, len)) {
 		goto load_next_index;
 	}
 

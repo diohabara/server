@@ -332,6 +332,8 @@ extern PSI_mutex_key key_BINLOG_LOCK_index, key_BINLOG_LOCK_xid_list,
   key_LOCK_user_conn, key_LOG_LOCK_log,
   key_master_info_data_lock, key_master_info_run_lock,
   key_master_info_sleep_lock, key_master_info_start_stop_lock,
+  key_master_info_start_alter_lock,
+  key_master_info_start_alter_list_lock,
   key_mutex_slave_reporting_capability_err_lock, key_relay_log_info_data_lock,
   key_relay_log_info_log_space_lock, key_relay_log_info_run_lock,
   key_rpl_group_info_sleep_lock,
@@ -901,6 +903,10 @@ enum enum_query_type
   // it evaluates to. Should be used for error messages, so that they
   // don't reveal values.
   QT_NO_DATA_EXPANSION= (1 << 9),
+
+  // The temporary tables used by the query might be freed by the time
+  // this print() call is made.
+  QT_DONT_ACCESS_TMP_TABLES= (1 << 12)
 };
 
 

@@ -232,9 +232,7 @@ static bool test_if_cheaper_ordering(const JOIN_TAB *tab,
                                      ha_rows *new_select_limit,
                                      uint *new_used_key_parts= NULL,
                                      uint *saved_best_key_parts= NULL);
-static int test_if_order_by_key(JOIN *join,
-                                ORDER *order, TABLE *table, uint idx,
-				uint *used_key_parts);
+static int test_if_order_by_key(JOIN *, ORDER *, TABLE *, uint, uint *);
 static bool test_if_skip_sort_order(JOIN_TAB *tab,ORDER *order,
 				    ha_rows select_limit, bool no_changes,
                                     const key_map *map);
@@ -361,6 +359,33 @@ bool dbug_user_var_equals_int(THD *thd, const char *name, int value)
     bool null_value;
     longlong var_value= var->val_int(&null_value);
     if (!null_value && var_value == value)
+      return TRUE;
+  }
+  return FALSE;
+}
+
+/*
+  Debugging : check if @name= value, comparing as string
+
+  Intended usage :
+
+  DBUG_EXECUTE_IF("log_slow_statement_end",
+                  if (dbug_user_var_equals_str(thd, "show_explain_probe_query",
+                                               thd->query()))
+                      dbug_serve_apcs(thd, 1);
+                  );
+*/
+
+bool dbug_user_var_equals_str(THD *thd, const char *name, const char* value)
+{
+  user_var_entry *var;
+  LEX_CSTRING varname= {name, strlen(name)};
+  if ((var= get_variable(&thd->user_vars, &varname, FALSE)))
+  {
+    bool null_value;
+    String str;
+    auto var_value= var->val_str(&null_value, &str, 10)->ptr();
+    if (!null_value && !strncmp(var_value, value, strlen(value)))
       return TRUE;
   }
   return FALSE;
@@ -7912,7 +7937,7 @@ best_access_path(JOIN      *join,
                 /* quick_range couldn't use key! */
                 records= (double) s->records/rec;
                 trace_access_idx.add("used_range_estimates", false)
-                                .add("cause", "not available");
+                                .add("reason", "not available");
               }
             }
             else
@@ -7950,16 +7975,14 @@ best_access_path(JOIN      *join,
               }
               else
               {
+                trace_access_idx.add("used_range_estimates", false);
                 if (table->opt_range_keys.is_set(key))
                 {
-                  trace_access_idx.add("used_range_estimates",false)
-                                  .add("cause",
-                                       "not better than ref estimates");
+                  trace_access_idx.add("reason", "not better than ref estimates");
                 }
                 else
                 {
-                  trace_access_idx.add("used_range_estimates", false)
-                                  .add("cause", "not available");
+                  trace_access_idx.add("reason", "not available");
                 }
               }
             }
@@ -8197,7 +8220,7 @@ best_access_path(JOIN      *join,
         trace_access_idx.add("chosen", false)
                         .add("cause", cause ? cause : "cost");
       }
-      cause= NULL;
+      cause= nullptr;
     } /* for each key */
     records= best_records;
   }
@@ -8219,7 +8242,6 @@ best_access_path(JOIN      *join,
       (!(s->table->map & join->outer_join) ||
        join->allowed_outer_join_with_cache))    // (2)
   {
-    Json_writer_object trace_access_hash(thd);
     double join_sel= 0.1;
     /* Estimate the cost of  the hash join access to the table */
     double rnd_records= matching_candidates_in_table(s, found_constraint,
@@ -8245,9 +8267,10 @@ best_access_path(JOIN      *join,
     best_uses_jbuf= TRUE;
     best_filter= 0;
     best_type= JT_HASH;
+    Json_writer_object trace_access_hash(thd);
     trace_access_hash.add("type", "hash");
     trace_access_hash.add("index", "hj-key");
-    trace_access_hash.add("cost", rnd_records);
+    trace_access_hash.add("rnd_records", rnd_records);
     trace_access_hash.add("cost", best);
     trace_access_hash.add("chosen", true);
   }
@@ -15674,7 +15697,7 @@ COND *Item_func_eq::build_equal_items(THD *thd,
       List_iterator_fast<Item_equal> it(cond_equal.current_level);
       while ((item_equal= it++))
       {
-        if (item_equal->fix_length_and_dec())
+        if (item_equal->fix_length_and_dec(thd))
           return NULL;
         item_equal->update_used_tables();
         set_if_bigger(thd->lex->current_select->max_equal_elems,
@@ -18966,8 +18989,9 @@ bool Create_tmp_table::add_fields(THD *thd,
 
           thd->mem_root= mem_root_save;
           if (!(tmp_item= new (thd->mem_root)
-                Item_temptable_field(thd, new_field)))
+                Item_field(thd, new_field)))
             goto err;
+          ((Item_field*) tmp_item)->set_refers_to_temp_table(true);
           arg= sum_item->set_arg(i, thd, tmp_item);
           thd->mem_root= &table->mem_root;
 
@@ -26064,9 +26088,10 @@ change_to_use_tmp_fields(THD *thd, Ref_ptr_array ref_pointer_array,
          */
         Item_func_set_user_var* suv=
           new (thd->mem_root) Item_func_set_user_var(thd, (Item_func_set_user_var*) item);
-        Item_field *new_field= new (thd->mem_root) Item_temptable_field(thd, field);
+        Item_field *new_field= new (thd->mem_root) Item_field(thd, field);
         if (!suv || !new_field)
           DBUG_RETURN(true);                  // Fatal error
+        new_field->set_refers_to_temp_table(true);
         List<Item> list;
         list.push_back(new_field, thd->mem_root);
         suv->set_arguments(thd, list);
@@ -26078,9 +26103,15 @@ change_to_use_tmp_fields(THD *thd, Ref_ptr_array ref_pointer_array,
     else if ((field= item->get_tmp_table_field()))
     {
       if (item->type() == Item::SUM_FUNC_ITEM && field->table->group)
+      {
         item_field= ((Item_sum*) item)->result_item(thd, field);
+      }
       else
-        item_field= (Item *) new (thd->mem_root) Item_temptable_field(thd, field);
+      {
+        item_field= (Item*) new (thd->mem_root) Item_field(thd, field);
+        if (item_field)
+          ((Item_field*) item_field)->set_refers_to_temp_table(true);
+      }
       if (!item_field)
         DBUG_RETURN(true);                    // Fatal error
 
@@ -26895,6 +26926,7 @@ int print_explain_message_line(select_result_sink *result,
                                ha_rows *rows,
                                const char *message)
 {
+  /* Note: for SHOW EXPLAIN, this is caller thread's THD */
   THD *thd= result->thd;
   MEM_ROOT *mem_root= thd->mem_root;
   Item *item_null= new (mem_root) Item_null(thd);
@@ -28984,6 +29016,7 @@ test_if_cheaper_ordering(const JOIN_TAB *tab, ORDER *order, TABLE *table,
       DBUG_ASSERT (ref_key != (int) nr);
 
       possible_key.add("can_resolve_order", true);
+      possible_key.add("direction", direction);
       bool is_covering= (table->covering_keys.is_set(nr) ||
                          (table->file->index_flags(nr, 0, 1) &
                           HA_CLUSTERED_INDEX));

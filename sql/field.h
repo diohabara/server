@@ -1522,11 +1522,20 @@ public:
     if (null_ptr)
       null_ptr=ADD_TO_PTR(null_ptr,ptr_diff,uchar*);
   }
+
+  /*
+    Copy the Field's value to buff. The value will be in table->record[]
+    format.
+  */
   void get_image(uchar *buff, uint length, CHARSET_INFO *cs) const
   { get_image(buff, length, ptr, cs); }
   virtual void get_image(uchar *buff, uint length,
                          const uchar *ptr_arg, CHARSET_INFO *cs) const
     { memcpy(buff,ptr_arg,length); }
+
+  /*
+    Set Field's value to the value in *buf.
+  */
   virtual void set_image(const uchar *buff,uint length, CHARSET_INFO *cs)
     { memcpy(ptr,buff,length); }
 
@@ -1865,6 +1874,7 @@ public:
   {
     return (double) 0.5; 
   }
+  virtual bool pos_through_val_str() { return false;}
 
   /*
     Check if comparison between the field and an item unambiguously
@@ -2150,6 +2160,8 @@ public:
   {
     return pos_in_interval_val_str(min, max, length_size());
   }
+  bool pos_through_val_str() override {return true;}
+
   bool test_if_equality_guarantees_uniqueness(const Item *const_item) const
     override;
   SEL_ARG *get_mm_leaf(RANGE_OPT_PARAM *param, KEY_PART *key_part,
@@ -5295,7 +5307,6 @@ public:
   Column_definition(THD *thd, Field *field, Field *orig_field);
   bool set_attributes(THD *thd,
                       const Lex_field_type_st &attr,
-                      CHARSET_INFO *cs,
                       column_definition_type_t type);
   void create_length_to_internal_length_null()
   {
@@ -5489,6 +5500,24 @@ public:
   { return compression_method_ptr; }
 
   bool check_vcol_for_key(THD *thd) const;
+
+  void set_lex_charset_collation(const Lex_charset_collation_st &lc)
+  {
+    charset= lc.charset_collation();
+    if (lc.is_contextually_typed_collation())
+      flags|= CONTEXT_COLLATION_FLAG;
+    else
+      flags&= ~CONTEXT_COLLATION_FLAG;
+  }
+  Lex_charset_collation lex_charset_collation() const
+  {
+    return Lex_charset_collation(
+             charset,
+             !charset ? Lex_charset_collation_st::TYPE_EMPTY :
+             flags & CONTEXT_COLLATION_FLAG ?
+             Lex_charset_collation_st::TYPE_COLLATE_CONTEXTUALLY_TYPED :
+             Lex_charset_collation_st::TYPE_CHARACTER_SET);
+  }
 };
 
 
@@ -5905,5 +5934,12 @@ ulonglong TABLE::vers_start_id() const
   return static_cast<ulonglong>(vers_start_field()->val_int());
 }
 
+double pos_in_interval_for_string(CHARSET_INFO *cset,
+                                  const uchar *midp_val, uint32 midp_len,
+                                  const uchar *min_val,  uint32 min_len,
+                                  const uchar *max_val,  uint32 max_len);
+
+double pos_in_interval_for_double(double midp_val,
+                                  double min_val, double max_val);
 
 #endif /* FIELD_INCLUDED */

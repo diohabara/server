@@ -1108,16 +1108,24 @@ Field_longstr::pack_sort_string(uchar *to, const SORT_FIELD_ATTR *sort_field)
   relative position of the field value in the numeric interval [min,max] 
 */
 
-double Field::pos_in_interval_val_real(Field *min, Field *max)
+double pos_in_interval_for_double(double midp_val, double min_val,
+                                  double max_val)
 {
   double n, d;
-  n= val_real() - min->val_real();
+  n= midp_val - min_val;
   if (n < 0)
     return 0.0;
-  d= max->val_real() - min->val_real();
+  d= max_val - min_val;
   if (d <= 0)
     return 1.0;
   return MY_MIN(n/d, 1.0);
+}
+
+
+double Field::pos_in_interval_val_real(Field *min, Field *max)
+{
+  return pos_in_interval_for_double(val_real(), min->val_real(),
+                                    max->val_real());
 }
 
 
@@ -1178,22 +1186,32 @@ static inline double safe_substract(ulonglong a, ulonglong b)
 
 double Field::pos_in_interval_val_str(Field *min, Field *max, uint data_offset)
 {
+  return pos_in_interval_for_string(charset(),
+            ptr      + data_offset, data_length(),
+            min->ptr + data_offset, min->data_length(),
+            max->ptr + data_offset, max->data_length()
+         );
+}
+
+
+double pos_in_interval_for_string(CHARSET_INFO *cset,
+                                  const uchar *midp_val, uint32 midp_len,
+                                  const uchar *min_val,  uint32 min_len,
+                                  const uchar *max_val,  uint32 max_len)
+{
   uchar mp_prefix[sizeof(ulonglong)];
   uchar minp_prefix[sizeof(ulonglong)];
   uchar maxp_prefix[sizeof(ulonglong)];
   ulonglong mp, minp, maxp;
-  charset()->strnxfrm(mp_prefix, sizeof(mp),
-                      ptr + data_offset,
-                      data_length());
-  charset()->strnxfrm(minp_prefix, sizeof(minp),
-                      min->ptr + data_offset,
-                      min->data_length());
-  charset()->strnxfrm(maxp_prefix, sizeof(maxp),
-                      max->ptr + data_offset,
-                      max->data_length());
-  mp= char_prefix_to_ulonglong(mp_prefix);
+
+  cset->strnxfrm(mp_prefix, sizeof(mp), midp_val, midp_len);
+  cset->strnxfrm(minp_prefix, sizeof(minp), min_val, min_len);
+  cset->strnxfrm(maxp_prefix, sizeof(maxp), max_val, max_len);
+
+  mp=   char_prefix_to_ulonglong(mp_prefix);
   minp= char_prefix_to_ulonglong(minp_prefix);
   maxp= char_prefix_to_ulonglong(maxp_prefix);
+
   double n, d;
   n= safe_substract(mp, minp);
   if (n < 0)
@@ -10398,17 +10416,15 @@ bool Column_definition::prepare_interval_field(MEM_ROOT *mem_root,
 
 bool Column_definition::set_attributes(THD *thd,
                                        const Lex_field_type_st &def,
-                                       CHARSET_INFO *cs,
                                        column_definition_type_t type)
 {
   DBUG_ASSERT(type_handler() == &type_handler_null);
-  DBUG_ASSERT(charset == &my_charset_bin || charset == NULL);
   DBUG_ASSERT(length == 0);
   DBUG_ASSERT(decimals == 0);
 
   set_handler(def.type_handler());
   return type_handler()->Column_definition_set_attributes(thd, this,
-                                                          def, cs, type);
+                                                          def, type);
 }
 
 
@@ -10416,16 +10432,12 @@ void
 Column_definition_attributes::set_length_and_dec(const Lex_length_and_dec_st
                                                  &type)
 {
-  if (type.length())
-  {
-    int err;
-    length= my_strtoll10(type.length(), NULL, &err);
-    if (err)
-      length= ~0ULL; // safety
-  }
+  if (type.has_explicit_length())
+    length= type.length_overflowed() ? (ulonglong) UINT_MAX32 + 1 :
+                                       (ulonglong) type.length();
 
-  if (type.dec())
-    decimals= (uint) atoi(type.dec());
+  if (type.has_explicit_dec())
+    decimals= type.dec();
 }
 
 
@@ -10524,7 +10536,7 @@ bool Column_definition::fix_attributes_real(uint default_length)
   }
   if (decimals != NOT_FIXED_DEC && decimals >= FLOATING_POINT_DECIMALS)
   {
-    my_error(ER_TOO_BIG_SCALE, MYF(0), static_cast<ulonglong>(decimals),
+    my_error(ER_TOO_BIG_SCALE, MYF(0),
              field_name.str, static_cast<uint>(FLOATING_POINT_DECIMALS-1));
     return true;
   }
@@ -10536,14 +10548,14 @@ bool Column_definition::fix_attributes_decimal()
 {
   if (decimals >= NOT_FIXED_DEC)
   {
-    my_error(ER_TOO_BIG_SCALE, MYF(0), static_cast<ulonglong>(decimals),
+    my_error(ER_TOO_BIG_SCALE, MYF(0),
              field_name.str, static_cast<uint>(NOT_FIXED_DEC - 1));
     return true;
   }
   my_decimal_trim(&length, &decimals);
   if (length > DECIMAL_MAX_PRECISION)
   {
-    my_error(ER_TOO_BIG_PRECISION, MYF(0), length, field_name.str,
+    my_error(ER_TOO_BIG_PRECISION, MYF(0), field_name.str,
              DECIMAL_MAX_PRECISION);
     return true;
   }
@@ -10572,7 +10584,7 @@ bool Column_definition::fix_attributes_temporal_with_time(uint int_part_length)
 {
   if (length > MAX_DATETIME_PRECISION)
   {
-    my_error(ER_TOO_BIG_PRECISION, MYF(0), length, field_name.str,
+    my_error(ER_TOO_BIG_PRECISION, MYF(0), field_name.str,
              MAX_DATETIME_PRECISION);
     return true;
   }

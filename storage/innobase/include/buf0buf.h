@@ -1763,6 +1763,9 @@ public:
   FlushHp flush_hp;
   /** modified blocks (a subset of LRU) */
   UT_LIST_BASE_NODE_T(buf_page_t) flush_list;
+  /** number of blocks ever added to flush_list;
+  protected by flush_list_mutex */
+  size_t flush_list_requests;
 private:
   /** whether the page cleaner needs wakeup from indefinite sleep */
   bool page_cleaner_is_idle;
@@ -1773,7 +1776,7 @@ public:
   pthread_cond_t do_flush_list;
 
   /** @return whether the page cleaner must sleep due to being idle */
-  bool page_cleaner_idle() const
+  bool page_cleaner_idle() const noexcept
   {
     mysql_mutex_assert_owner(&flush_list_mutex);
     return page_cleaner_is_idle;
@@ -1898,24 +1901,24 @@ public:
 
 private:
   /** Remove a block from the flush list. */
-  inline void delete_from_flush_list_low(buf_page_t *bpage);
+  inline void delete_from_flush_list_low(buf_page_t *bpage) noexcept;
   /** Remove a block from flush_list.
   @param bpage   buffer pool page
   @param clear   whether to invoke buf_page_t::clear_oldest_modification() */
-  void delete_from_flush_list(buf_page_t *bpage, bool clear);
+  void delete_from_flush_list(buf_page_t *bpage, bool clear) noexcept;
 public:
   /** Remove a block from flush_list.
   @param bpage   buffer pool page */
-  void delete_from_flush_list(buf_page_t *bpage)
+  void delete_from_flush_list(buf_page_t *bpage) noexcept
   { delete_from_flush_list(bpage, true); }
 
   /** Insert a modified block into the flush list.
   @param block    modified block
   @param lsn      start LSN of the mini-transaction that modified the block */
-  void insert_into_flush_list(buf_block_t *block, lsn_t lsn);
+  void insert_into_flush_list(buf_block_t *block, lsn_t lsn) noexcept;
 
   /** Free a page whose underlying file page has been freed. */
-  inline void release_freed_page(buf_page_t *bpage);
+  inline void release_freed_page(buf_page_t *bpage) noexcept;
 
 private:
   /** Temporary memory for page_compressed and encrypted I/O */

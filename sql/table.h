@@ -64,6 +64,7 @@ class derived_handler;
 class Pushdown_derived;
 struct Name_resolution_context;
 class Table_function_json_table;
+class Open_table_context;
 
 /*
   Used to identify NESTED_JOIN structures within a join (applicable only to
@@ -679,16 +680,21 @@ class TABLE_STATISTICS_CB
 public:
   MEM_ROOT  mem_root; /* MEM_ROOT to allocate statistical data for the table */
   Table_statistics *table_stats; /* Structure to access the statistical data */
-  ulong total_hist_size;         /* Total size of all histograms */
+
+  /*
+    Whether the table has histograms.
+    (If the table has none, histograms_are_ready() can finish sooner)
+  */
+  bool have_histograms;
 
   bool histograms_are_ready() const
   {
-    return !total_hist_size || hist_state.is_ready();
+    return !have_histograms || hist_state.is_ready();
   }
 
   bool start_histograms_load()
   {
-    return total_hist_size && hist_state.start_load();
+    return have_histograms && hist_state.start_load();
   }
 
   void end_histograms_load() { hist_state.end_load(); }
@@ -909,6 +915,13 @@ struct TABLE_SHARE
   vers_kind_t versioned;
   period_info_t vers;
   period_info_t period;
+  /*
+      Protect multiple threads from repeating partition auto-create over
+      single share.
+
+      TODO: remove it when partitioning metadata will be in TABLE_SHARE.
+  */
+  bool          vers_skip_auto_create;
 
   bool init_period_from_extra2(period_info_t *period, const uchar *data,
                                const uchar *end);
@@ -1773,6 +1786,10 @@ public:
 
   ulonglong vers_start_id() const;
   ulonglong vers_end_id() const;
+#ifdef WITH_PARTITION_STORAGE_ENGINE
+  bool vers_switch_partition(THD *thd, TABLE_LIST *table_list,
+                             Open_table_context *ot_ctx);
+#endif
 
   int update_generated_fields();
   int period_make_insert(Item *src, Field *dst);
@@ -2567,6 +2584,13 @@ struct TABLE_LIST
   bool          merged;
   bool          merged_for_insert;
   bool          sequence;  /* Part of NEXTVAL/CURVAL/LASTVAL */
+  /*
+      Protect single thread from repeating partition auto-create over
+      multiple share instances (as the share is closed on backoff action).
+
+      Skips auto-create only for one given query id.
+  */
+  query_id_t    vers_skip_create;
 
   /*
     Items created by create_view_field and collected to change them in case

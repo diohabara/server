@@ -173,7 +173,6 @@ SET(INNOBASE_SOURCES
 	include/lock0types.h
 	include/log0crypt.h
 	include/log0log.h
-	include/log0log.inl
 	include/log0recv.h
 	include/log0types.h
 	include/mach0data.h
@@ -203,7 +202,6 @@ SET(INNOBASE_SOURCES
 	include/que0types.h
 	include/read0types.h
 	include/rem0cmp.h
-	include/rem0cmp.inl
 	include/rem0rec.h
 	include/rem0rec.inl
 	include/rem0types.h
@@ -335,7 +333,9 @@ OPTION(WITH_PMEM "Support redo log in persistent memory" OFF)
 FIND_PACKAGE(PMEM)
 IF(PMEM_FOUND)
   INCLUDE_DIRECTORIES(${PMEM_INCLUDES})
-  ADD_COMPILE_FLAGS(log/log0log.cc COMPILE_FLAGS "-DHAVE_PMEM")
+  ADD_COMPILE_FLAGS(log/log0log.cc log/log0recv.cc
+    buf/buf0flu.cc mtr/mtr0mtr.cc trx/trx0trx.cc srv/srv0start.cc
+    COMPILE_FLAGS "-DHAVE_PMEM")
   SET(PMEM_LIBRARY ${PMEM_LIBRARIES})
 ELSE()
   IF(WITH_PMEM)

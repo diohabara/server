@@ -885,18 +885,22 @@ bool fil_space_free(uint32_t id, bool x_latched)
 		}
 
 		if (!recv_recovery_is_on()) {
-			mysql_mutex_lock(&log_sys.mutex);
-		}
+			log_sys.latch.wr_lock(SRW_LOCK_CALL);
 
-		mysql_mutex_assert_owner(&log_sys.mutex);
+			if (space->max_lsn) {
+				ut_d(space->max_lsn = 0);
+				fil_system.named_spaces.remove(*space);
+			}
 
-		if (space->max_lsn != 0) {
-			ut_d(space->max_lsn = 0);
-			fil_system.named_spaces.remove(*space);
-		}
-
-		if (!recv_recovery_is_on()) {
-			mysql_mutex_unlock(&log_sys.mutex);
+			log_sys.latch.wr_unlock();
+		} else {
+#ifndef SUX_LOCK_GENERIC
+			ut_ad(log_sys.latch.is_write_locked());
+#endif
+			if (space->max_lsn) {
+				ut_d(space->max_lsn = 0);
+				fil_system.named_spaces.remove(*space);
+			}
 		}
 
 		fil_space_free_low(space);
@@ -1392,48 +1396,6 @@ void fil_set_max_space_id_if_bigger(uint32_t max_id)
 	mysql_mutex_unlock(&fil_system.mutex);
 }
 
-/** Write the flushed LSN to the page header of the first page in the
-system tablespace.
-@param[in]	lsn	flushed LSN
-@return DB_SUCCESS or error number */
-dberr_t
-fil_write_flushed_lsn(
-	lsn_t	lsn)
-{
-	byte*	buf;
-	ut_ad(!srv_read_only_mode);
-
-	if (!fil_system.sys_space->acquire()) {
-		return DB_ERROR;
-	}
-
-	buf = static_cast<byte*>(aligned_malloc(srv_page_size, srv_page_size));
-
-	auto fio = fil_system.sys_space->io(IORequestRead, 0, srv_page_size,
-					    buf);
-
-	if (fio.err == DB_SUCCESS) {
-		mach_write_to_8(buf + FIL_PAGE_FILE_FLUSH_LSN_OR_KEY_VERSION,
-				lsn);
-
-		uint32_t fsp_flags = mach_read_from_4(
-			buf + FSP_HEADER_OFFSET + FSP_SPACE_FLAGS);
-
-		if (fil_space_t::full_crc32(fsp_flags)) {
-			buf_flush_assign_full_crc32_checksum(buf);
-		}
-
-		fio = fil_system.sys_space->io(IORequestWrite,
-					       0, srv_page_size, buf);
-		fil_flush_file_spaces();
-	} else {
-		fil_system.sys_space->release();
-	}
-
-	aligned_free(buf);
-	return fio.err;
-}
-
 /** Acquire a tablespace reference.
 @param id      tablespace identifier
 @return tablespace
@@ -1506,7 +1468,7 @@ inline void mtr_t::log_file_op(mfile_type_t type, uint32_t space_id,
   {
     ut_ad(strchr(new_path, '/'));
     m_log.push(reinterpret_cast<const byte*>(path), uint32_t(len + 1));
-    m_log.push(reinterpret_cast<const byte*>(new_path), uint32_t(new_len));
+    m_log.push(reinterpret_cast<const byte*>(new_path), uint32_t(new_len - 1));
   }
   else
     m_log.push(reinterpret_cast<const byte*>(path), uint32_t(len));
@@ -1524,6 +1486,15 @@ static void fil_name_write_rename_low(uint32_t space_id, const char *old_name,
   mtr->log_file_op(FILE_RENAME, space_id, old_name, new_name);
 }
 
+static void fil_name_commit_durable(mtr_t *mtr)
+{
+  log_sys.latch.wr_lock(SRW_LOCK_CALL);
+  auto lsn= mtr->commit_files();
+  log_sys.latch.wr_unlock();
+  mtr->flag_wr_unlock();
+  log_write_up_to(lsn, true);
+}
+
 /** Write redo log for renaming a file.
 @param[in]	space_id	tablespace id
 @param[in]	old_name	tablespace file name
@@ -1534,8 +1505,7 @@ static void fil_name_write_rename(uint32_t space_id,
   mtr_t mtr;
   mtr.start();
   fil_name_write_rename_low(space_id, old_name, new_name, &mtr);
-  mtr.commit();
-  log_write_up_to(mtr.commit_lsn(), true);
+  fil_name_commit_durable(&mtr);
 }
 
 /** Write FILE_MODIFY for a file.
@@ -1665,8 +1635,7 @@ pfs_os_file_t fil_delete_tablespace(uint32_t id)
     mtr_t mtr;
     mtr.start();
     mtr.log_file_op(FILE_DELETE, id, space->chain.start->name);
-    mtr.commit();
-    log_write_up_to(mtr.commit_lsn(), true);
+    fil_name_commit_durable(&mtr);
 
     /* Remove any additional files. */
     if (char *cfg_name= fil_make_filepath(space->chain.start->name,
@@ -1693,13 +1662,13 @@ pfs_os_file_t fil_delete_tablespace(uint32_t id)
     handle= fil_system.detach(space, true);
     mysql_mutex_unlock(&fil_system.mutex);
 
-    mysql_mutex_lock(&log_sys.mutex);
+    log_sys.latch.wr_lock(SRW_LOCK_CALL);
     if (space->max_lsn)
     {
       ut_d(space->max_lsn = 0);
       fil_system.named_spaces.remove(*space);
     }
-    mysql_mutex_unlock(&log_sys.mutex);
+    log_sys.latch.wr_unlock();
 
     fil_space_free_low(space);
   }
@@ -1900,11 +1869,14 @@ static bool fil_rename_tablespace(uint32_t id, const char *old_path,
 	ut_ad(strchr(new_file_name, '/'));
 
 	if (!recv_recovery_is_on()) {
-		mysql_mutex_lock(&log_sys.mutex);
+		log_sys.latch.wr_lock(SRW_LOCK_CALL);
 	}
 
-	/* log_sys.mutex is above fil_system.mutex in the latching order */
-	mysql_mutex_assert_owner(&log_sys.mutex);
+	/* log_sys.latch is above fil_system.mutex in the latching order */
+#ifndef SUX_LOCK_GENERIC
+	ut_ad(log_sys.latch.is_write_locked() ||
+	      srv_operation == SRV_OPERATION_RESTORE_DELTA);
+#endif
 	mysql_mutex_lock(&fil_system.mutex);
 	space->release();
 	ut_ad(node->name == old_file_name);
@@ -1927,7 +1899,7 @@ skip_second_rename:
 	}
 
 	if (!recv_recovery_is_on()) {
-		mysql_mutex_unlock(&log_sys.mutex);
+		log_sys.latch.wr_unlock();
 	}
 
 	mysql_mutex_unlock(&fil_system.mutex);
@@ -1980,8 +1952,7 @@ fil_ibd_create(
 
 	mtr.start();
 	mtr.log_file_op(FILE_CREATE, space_id, path);
-	mtr.commit();
-	log_write_up_to(mtr.commit_lsn(), true);
+	fil_name_commit_durable(&mtr);
 
 	ulint type;
 	static_assert(((UNIV_ZIP_SIZE_MIN >> 1) << 3) == 4096,
@@ -2781,8 +2752,8 @@ fil_io_t fil_space_t::io(const IORequest &type, os_offset_t offset, size_t len,
                          void *buf, buf_page_t *bpage)
 {
 	ut_ad(referenced());
-	ut_ad(offset % OS_FILE_LOG_BLOCK_SIZE == 0);
-	ut_ad((len % OS_FILE_LOG_BLOCK_SIZE) == 0);
+	ut_ad(offset % UNIV_ZIP_SIZE_MIN == 0);
+	ut_ad(len % 512 == 0); /* page_compressed */
 	ut_ad(fil_validate_skip());
 	ut_ad(type.is_read() || type.is_write());
 	ut_ad(type.type != IORequest::DBLWR_BATCH);
@@ -3078,19 +3049,6 @@ fil_space_validate_for_mtr_commit(
 }
 #endif /* UNIV_DEBUG */
 
-/** Write a FILE_MODIFY record for a persistent tablespace.
-@param[in]	space	tablespace
-@param[in,out]	mtr	mini-transaction */
-static
-void
-fil_names_write(
-	const fil_space_t*	space,
-	mtr_t*			mtr)
-{
-	ut_ad(UT_LIST_GET_LEN(space->chain) == 1);
-	fil_name_write(space->id, UT_LIST_GET_FIRST(space->chain)->name, mtr);
-}
-
 /** Note that a non-predefined persistent tablespace has been modified
 by redo log.
 @param[in,out]	space	tablespace */
@@ -3098,7 +3056,9 @@ void
 fil_names_dirty(
 	fil_space_t*	space)
 {
-	mysql_mutex_assert_owner(&log_sys.mutex);
+#ifndef SUX_LOCK_GENERIC
+	ut_ad(log_sys.latch.is_write_locked());
+#endif
 	ut_ad(recv_recovery_is_on());
 	ut_ad(log_sys.get_lsn() != 0);
 	ut_ad(space->max_lsn == 0);
@@ -3108,56 +3068,48 @@ fil_names_dirty(
 	space->max_lsn = log_sys.get_lsn();
 }
 
-/** Write FILE_MODIFY records when a non-predefined persistent
-tablespace was modified for the first time since the latest
-fil_names_clear().
-@param[in,out]	space	tablespace */
-void fil_names_dirty_and_write(fil_space_t* space)
+/** Write a FILE_MODIFY record when a non-predefined persistent
+tablespace was modified for the first time since fil_names_clear(). */
+ATTRIBUTE_NOINLINE ATTRIBUTE_COLD void mtr_t::name_write()
 {
-	mysql_mutex_assert_owner(&log_sys.mutex);
-	ut_d(fil_space_validate_for_mtr_commit(space));
-	ut_ad(space->max_lsn == log_sys.get_lsn());
+#ifndef SUX_LOCK_GENERIC
+  ut_ad(log_sys.latch.is_write_locked());
+#endif
+  ut_d(fil_space_validate_for_mtr_commit(m_user_space));
+  ut_ad(!m_user_space->max_lsn);
+  m_user_space->max_lsn= log_sys.get_lsn();
 
-	fil_system.named_spaces.push_back(*space);
-	mtr_t mtr;
-	mtr.start();
-	fil_names_write(space, &mtr);
+  fil_system.named_spaces.push_back(*m_user_space);
+  ut_ad(UT_LIST_GET_LEN(m_user_space->chain) == 1);
 
-	DBUG_EXECUTE_IF("fil_names_write_bogus",
-			{
-				char bogus_name[] = "./test/bogus file.ibd";
-				fil_name_write(
-					SRV_SPACE_ID_UPPER_BOUND,
-					bogus_name, &mtr);
-			});
-
-	mtr.commit_files();
+  mtr_t mtr;
+  mtr.start();
+  fil_name_write(m_user_space->id,
+                 UT_LIST_GET_FIRST(m_user_space->chain)->name,
+                 &mtr);
+  mtr.commit_files();
 }
 
 /** On a log checkpoint, reset fil_names_dirty_and_write() flags
-and write out FILE_MODIFY and FILE_CHECKPOINT if needed.
-@param[in]	lsn		checkpoint LSN
-@param[in]	do_write	whether to always write FILE_CHECKPOINT
-@return whether anything was written to the redo log
-@retval false	if no flags were set and nothing written
-@retval true	if anything was written to the redo log */
-bool
-fil_names_clear(
-	lsn_t	lsn,
-	bool	do_write)
+and write out FILE_MODIFY if needed, and write FILE_CHECKPOINT.
+@param lsn  checkpoint LSN
+@return current LSN */
+lsn_t fil_names_clear(lsn_t lsn)
 {
 	mtr_t	mtr;
 
-	mysql_mutex_assert_owner(&log_sys.mutex);
+#ifndef SUX_LOCK_GENERIC
+	ut_ad(log_sys.latch.is_write_locked());
+#endif
 	ut_ad(lsn);
+	ut_ad(log_sys.is_latest());
 
 	mtr.start();
 
 	for (auto it = fil_system.named_spaces.begin();
 	     it != fil_system.named_spaces.end(); ) {
-		if (mtr.get_log()->size()
-		    + strlen(it->chain.start->name)
-		    >= RECV_SCAN_SIZE - (3 + 5 + 1)) {
+		if (mtr.get_log()->size() + strlen(it->chain.start->name)
+		    >= recv_sys.MTR_SIZE_MAX - (3 + 5)) {
 			/* Prevent log parse buffer overflow */
 			mtr.commit_files();
 			mtr.start();
@@ -3180,20 +3132,13 @@ fil_names_clear(
 		was called. If we kept track of "min_lsn" (the first LSN
 		where max_lsn turned nonzero), we could avoid the
 		fil_names_write() call if min_lsn > lsn. */
-
-		fil_names_write(&*it, &mtr);
-		do_write = true;
-
+		ut_ad(UT_LIST_GET_LEN((*it).chain) == 1);
+		fil_name_write((*it).id, UT_LIST_GET_FIRST((*it).chain)->name,
+			       &mtr);
 		it = next;
 	}
 
-	if (do_write) {
-		mtr.commit_files(lsn);
-	} else {
-		ut_ad(!mtr.has_modifications());
-	}
-
-	return(do_write);
+	return mtr.commit_files(lsn);
 }
 
 /* Unit Tests */

@@ -61,7 +61,6 @@ Created 10/8/1995 Heikki Tuuri
 #include "srv0start.h"
 #include "trx0i_s.h"
 #include "trx0purge.h"
-#include "ut0crc32.h"
 #include "btr0defragment.h"
 #include "ut0mem.h"
 #include "fil0fil.h"
@@ -153,8 +152,6 @@ char*	srv_log_group_home_dir;
 /** The InnoDB redo log file size, or 0 when changing the redo log format
 at startup (while disallowing writes to the redo log). */
 ulonglong	srv_log_file_size;
-/** innodb_log_buffer_size, in bytes */
-ulong		srv_log_buffer_size;
 /** innodb_flush_log_at_trx_commit */
 ulong		srv_flush_log_at_trx_commit;
 /** innodb_flush_log_at_timeout */
@@ -163,8 +160,6 @@ uint		srv_flush_log_at_timeout;
 ulong		srv_page_size;
 /** log2 of innodb_page_size; @see innodb_init_params() */
 uint32_t	srv_page_size_shift;
-/** innodb_log_write_ahead_size */
-ulong		srv_log_write_ahead_size;
 
 /** innodb_adaptive_flushing; try to flush dirty pages so as to avoid
 IO bursts at the checkpoints. */
@@ -188,9 +183,8 @@ with mysql_mutex_lock(), which will wait until it gets the mutex. */
 
 /** copy of innodb_buffer_pool_size */
 ulint	srv_buf_pool_size;
-/** Requested buffer pool chunk size. Each buffer pool instance consists
-of one or more chunks. */
-ulong	srv_buf_pool_chunk_unit;
+/** Requested buffer pool chunk size */
+size_t	srv_buf_pool_chunk_unit;
 /** innodb_lru_scan_depth; number of blocks scanned in LRU flush batch */
 ulong	srv_LRU_scan_depth;
 /** innodb_flush_neighbors; whether or not to flush neighbors of a block */
@@ -716,8 +710,6 @@ static void srv_refresh_innodb_monitor_stats(time_t current_time)
 	btr_cur_n_non_sea_old = btr_cur_n_non_sea;
 #endif /* BTR_CUR_HASH_ADAPT */
 
-	log_refresh_stats();
-
 	buf_refresh_io_stats();
 
 	srv_n_rows_inserted_old = srv_stats.n_rows_inserted;
@@ -1008,12 +1000,6 @@ srv_export_innodb_status(void)
 	export_vars.innodb_data_pending_writes =
 		ulint(MONITOR_VALUE(MONITOR_OS_PENDING_WRITES));
 
-	export_vars.innodb_data_pending_fsyncs =
-		log_sys.get_pending_flushes()
-		+ fil_n_pending_tablespace_flushes;
-
-	export_vars.innodb_data_fsyncs = os_n_fsyncs;
-
 	export_vars.innodb_data_read = srv_stats.data_read;
 
 	export_vars.innodb_data_reads = os_n_file_reads;
@@ -1034,9 +1020,6 @@ srv_export_innodb_status(void)
 
 	export_vars.innodb_buffer_pool_read_requests
 		= buf_pool.stat.n_page_gets;
-
-	export_vars.innodb_buffer_pool_write_requests =
-		srv_stats.buf_pool_write_requests;
 
 	export_vars.innodb_buffer_pool_reads = srv_stats.buf_pool_reads;
 
@@ -1086,22 +1069,6 @@ srv_export_innodb_status(void)
 
 	export_vars.innodb_max_trx_id = trx_sys.get_max_trx_id();
 	export_vars.innodb_history_list_length = trx_sys.history_size();
-
-	export_vars.innodb_log_waits = srv_stats.log_waits;
-
-	export_vars.innodb_os_log_written = srv_stats.os_log_written;
-
-	export_vars.innodb_os_log_fsyncs = log_sys.get_flushes();
-
-	export_vars.innodb_os_log_pending_fsyncs
-		= log_sys.get_pending_flushes();
-
-	export_vars.innodb_os_log_pending_writes =
-		srv_stats.os_log_pending_writes;
-
-	export_vars.innodb_log_write_requests = srv_stats.log_write_requests;
-
-	export_vars.innodb_log_writes = srv_stats.log_writes;
 
 	mysql_mutex_lock(&lock_sys.wait_mutex);
 	export_vars.innodb_row_lock_waits = lock_sys.get_wait_cumulative();
@@ -1194,13 +1161,15 @@ srv_export_innodb_status(void)
 
 	mysql_mutex_unlock(&srv_innodb_monitor_mutex);
 
-	mysql_mutex_lock(&log_sys.mutex);
+	log_sys.latch.rd_lock(SRW_LOCK_CALL);
 	export_vars.innodb_lsn_current = log_sys.get_lsn();
 	export_vars.innodb_lsn_flushed = log_sys.get_flushed_lsn();
 	export_vars.innodb_lsn_last_checkpoint = log_sys.last_checkpoint_lsn;
 	export_vars.innodb_checkpoint_max_age = static_cast<ulint>(
 		log_sys.max_checkpoint_age);
-	mysql_mutex_unlock(&log_sys.mutex);
+	log_sys.latch.rd_unlock();
+	export_vars.innodb_os_log_written = export_vars.innodb_lsn_current
+		- recv_sys.lsn;
 
 	export_vars.innodb_checkpoint_age = static_cast<ulint>(
 		export_vars.innodb_lsn_current
@@ -1278,7 +1247,7 @@ static void srv_monitor()
 void srv_monitor_task(void*)
 {
 	/* number of successive fatal timeouts observed */
-	static lsn_t		old_lsn = recv_sys.recovered_lsn;
+	static lsn_t		old_lsn = recv_sys.lsn;
 
 	ut_ad(!srv_read_only_mode);
 
@@ -1843,10 +1812,10 @@ void purge_coordinator_state::refresh(bool full)
     lsn_hwm= adaptive_purge_threshold + series[n_threads];
   }
 
-  mysql_mutex_lock(&log_sys.mutex);
+  log_sys.latch.rd_lock(SRW_LOCK_CALL);
   const lsn_t last= log_sys.last_checkpoint_lsn,
     max_age= log_sys.max_checkpoint_age;
-  mysql_mutex_unlock(&log_sys.mutex);
+  log_sys.latch.rd_unlock();
 
   lsn_age_factor= ulint(((log_sys.get_lsn() - last) * 100) / max_age);
 }

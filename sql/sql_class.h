@@ -81,6 +81,7 @@ class Wsrep_applier_service;
 class Reprepare_observer;
 class Relay_log_info;
 struct rpl_group_info;
+struct rpl_parallel_thread;
 class Rpl_filter;
 class Query_log_event;
 class Load_log_event;
@@ -191,6 +192,8 @@ enum enum_binlog_row_image {
 #define OLD_MODE_NO_PROGRESS_INFO			(1 << 1)
 #define OLD_MODE_ZERO_DATE_TIME_CAST                    (1 << 2)
 #define OLD_MODE_UTF8_IS_UTF8MB3      (1 << 3)
+#define OLD_MODE_IGNORE_INDEX_ONLY_FOR_JOIN          (1 << 4)
+#define OLD_MODE_COMPAT_5_1_CHECKSUM    (1 << 5)
 
 extern char internal_table_name[2];
 extern char empty_c_string[1];
@@ -290,9 +293,9 @@ class Key_part_spec :public Sql_alloc {
 public:
   LEX_CSTRING field_name;
   uint length;
-  bool generated;
+  bool generated, asc;
   Key_part_spec(const LEX_CSTRING *name, uint len, bool gen= false)
-    : field_name(*name), length(len), generated(gen)
+    : field_name(*name), length(len), generated(gen), asc(1)
   {}
   bool operator==(const Key_part_spec& other) const;
   /**
@@ -853,6 +856,7 @@ typedef struct system_variables
 
   vers_asof_timestamp_t vers_asof_timestamp;
   ulong vers_alter_history;
+  my_bool binlog_alter_two_phase;
 } SV;
 
 /**
@@ -1596,6 +1600,10 @@ enum enum_locked_tables_mode
   LTM_NONE= 0,
   LTM_LOCK_TABLES,
   LTM_PRELOCKED,
+  /*
+     TODO: remove LTM_PRELOCKED_UNDER_LOCK_TABLES: it is never used apart from
+     LTM_LOCK_TABLES.
+  */
   LTM_PRELOCKED_UNDER_LOCK_TABLES,
   LTM_always_last
 };
@@ -1778,7 +1786,7 @@ public:
     *this= *state;
   }
 
-  void reset_open_tables_state(THD *thd)
+  void reset_open_tables_state()
   {
     open_tables= 0;
     temporary_tables= 0;
@@ -2126,7 +2134,7 @@ public:
   bool restore_lock(THD *thd, TABLE_LIST *dst_table_list, TABLE *table,
                     MYSQL_LOCK *lock);
   void add_back_last_deleted_lock(TABLE_LIST *dst_table_list);
-  void mark_table_for_reopen(THD *thd, TABLE *table);
+  void mark_table_for_reopen(TABLE *table);
 };
 
 
@@ -2944,6 +2952,14 @@ public:
   int binlog_flush_pending_rows_event(bool stmt_end, bool is_transactional);
   int binlog_remove_pending_rows_event(bool clear_maps, bool is_transactional);
 
+  bool binlog_need_stmt_format(bool is_transactional) const
+  {
+    return log_current_statement() &&
+           !binlog_get_pending_rows_event(is_transactional);
+  }
+
+  bool binlog_for_noop_dml(bool transactional_table);
+
   /**
     Determine the binlog format of the current statement.
 
@@ -3030,6 +3046,11 @@ public:
   }
   bool binlog_table_should_be_logged(const LEX_CSTRING *db);
 
+  // Accessors and setters of two-phase loggable ALTER binlog properties
+  uchar get_binlog_flags_for_alter();
+  void   set_binlog_flags_for_alter(uchar);
+  uint64 get_binlog_start_alter_seq_no();
+  void   set_binlog_start_alter_seq_no(uint64);
 #endif /* MYSQL_CLIENT */
 
 public:
@@ -3585,8 +3606,10 @@ public:
   /* set during loop of derived table processing */
   bool       derived_tables_processing;
   bool       tablespace_op;	/* This is TRUE in DISCARD/IMPORT TABLESPACE */
-  /* True if we have to log the current statement */
-  bool	     log_current_statement;
+  bool       log_current_statement() const
+  {
+    return variables.option_bits & OPTION_BINLOG_THIS_STMT;
+  }
   /**
     True if a slave error. Causes the slave to stop. Not the same
     as the statement execution error (is_error()), since
@@ -7760,24 +7783,25 @@ public:
 void dbug_serve_apcs(THD *thd, int n_calls);
 #endif 
 
-class ScopedStatementReplication
+class StatementBinlog
 {
-public:
-  ScopedStatementReplication(THD *thd) :
-    saved_binlog_format(thd
-                        ? thd->set_current_stmt_binlog_format_stmt()
-                        : BINLOG_FORMAT_MIXED),
-    thd(thd)
-  {}
-  ~ScopedStatementReplication()
-  {
-    if (thd)
-      thd->restore_stmt_binlog_format(saved_binlog_format);
-  }
-
-private:
   const enum_binlog_format saved_binlog_format;
   THD *const thd;
+
+public:
+  StatementBinlog(THD *thd, bool need_stmt) :
+    saved_binlog_format(thd->get_current_stmt_binlog_format()),
+    thd(thd)
+  {
+    if (need_stmt && saved_binlog_format != BINLOG_FORMAT_STMT)
+    {
+      thd->set_current_stmt_binlog_format_stmt();
+    }
+  }
+  ~StatementBinlog()
+  {
+    thd->set_current_stmt_binlog_format(saved_binlog_format);
+  }
 };
 
 
@@ -7837,6 +7861,39 @@ extern THD_list server_threads;
 
 void setup_tmp_table_column_bitmaps(TABLE *table, uchar *bitmaps,
                                     uint field_count);
+
+/*
+  RAII utility class to ease binlogging with temporary setting
+  THD etc context and restoring the original one upon logger execution.
+*/
+class Write_log_with_flags
+{
+  THD*   m_thd;
+#ifdef WITH_WSREP
+  bool wsrep_to_isolation;
+#endif
+
+public:
+~Write_log_with_flags()
+  {
+    m_thd->set_binlog_flags_for_alter(0);
+    m_thd->set_binlog_start_alter_seq_no(0);
+#ifdef WITH_WSREP
+    if (wsrep_to_isolation)
+      wsrep_to_isolation_end(m_thd);
+#endif
+  }
+
+  Write_log_with_flags(THD *thd, uchar flags,
+                       bool do_wsrep_iso __attribute__((unused))= false) :
+    m_thd(thd)
+  {
+    m_thd->set_binlog_flags_for_alter(flags);
+#ifdef WITH_WSREP
+    wsrep_to_isolation= do_wsrep_iso && WSREP(m_thd);
+#endif
+  }
+};
 
 #endif /* MYSQL_SERVER */
 #endif /* SQL_CLASS_INCLUDED */

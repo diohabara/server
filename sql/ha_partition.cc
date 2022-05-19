@@ -2736,6 +2736,7 @@ register_query_cache_dependant_tables(THD *thd,
     2) MAX_ROWS, MIN_ROWS on partition
     3) Index file name on partition
     4) Data file name on partition
+    5) Engine-defined attributes on partition
 */
 
 int ha_partition::set_up_table_before_create(TABLE *tbl,
@@ -2773,6 +2774,10 @@ int ha_partition::set_up_table_before_create(TABLE *tbl,
   if (info->connect_string.length)
     info->used_fields|= HA_CREATE_USED_CONNECTION;
   tbl->s->connect_string= part_elem->connect_string;
+  if (part_elem->option_list)
+    tbl->s->option_list= part_elem->option_list;
+  if (part_elem->option_struct)
+    tbl->s->option_struct= part_elem->option_struct;
   DBUG_RETURN(0);
 }
 
@@ -4190,6 +4195,7 @@ int ha_partition::external_lock(THD *thd, int lock_type)
       (void) (*file)->ha_external_lock(thd, lock_type);
     } while (*(++file));
   }
+<<<<<<< HEAD
   if (lock_type == F_WRLCK)
   {
     if (m_part_info->part_expr)
@@ -4197,6 +4203,11 @@ int ha_partition::external_lock(THD *thd, int lock_type)
     if ((error= m_part_info->vers_set_hist_part(thd)))
       goto err_handler;
   }
+=======
+  if (lock_type == F_WRLCK && m_part_info->part_expr)
+    m_part_info->part_expr->walk(&Item::register_field_in_read_map, 1, 0);
+
+>>>>>>> upstream/10.9
   DBUG_RETURN(0);
 
 err_handler:
@@ -4340,7 +4351,10 @@ int ha_partition::start_stmt(THD *thd, thr_lock_type lock_type)
   {
     if (m_part_info->part_expr)
       m_part_info->part_expr->walk(&Item::register_field_in_read_map, 1, 0);
+<<<<<<< HEAD
     error= m_part_info->vers_set_hist_part(thd);
+=======
+>>>>>>> upstream/10.9
   }
   DBUG_RETURN(error);
 }
